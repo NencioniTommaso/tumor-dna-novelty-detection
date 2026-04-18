@@ -4,23 +4,46 @@ Contains sequence feature extraction, mismatch generation, and Gram matrix compu
 Optimized for multi-core execution using joblib.
 """
 
+
+import itertools
+from functools import lru_cache
+
 import numpy as np
 import scipy.sparse as sp
 from sklearn.feature_extraction.text import CountVectorizer
 from joblib import Parallel, delayed
 from typing import List, Tuple, Optional
 
-def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: List[str] = ['A', 'C', 'G', 'T', 'M']) -> List[str]:
-    """Generates all k-mers within 'm' mismatches of the given kmer."""
+@lru_cache(maxsize=100000)
+def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: Tuple[str, ...] = ('A', 'C', 'G', 'T', 'M')) -> List[str]:
+    """
+    Generates all k-mers within 'm' mismatches of the given kmer.
+    Upgraded to use itertools for exact mutational combinations and LRU Cache for speed.
+    """
     if m == 0:
         return [kmer]
         
     neighborhood = set([kmer])
-    for i in range(len(kmer)):
-        for char in alphabet:
-            if char != kmer[i]:
-                mismatch_kmer = kmer[:i] + char + kmer[i+1:]
-                neighborhood.add(mismatch_kmer)
+    kmer_list = list(kmer)
+    indices = list(range(len(kmer)))
+    
+    # We loop from 1 mismatch up to 'm' mismatches
+    for num_mismatches in range(1, m + 1):
+        for positions in itertools.combinations(indices, num_mismatches):
+            for replacement_chars in itertools.product(alphabet, repeat=num_mismatches):
+                is_true_mismatch = True
+                for pos, char in zip(positions, replacement_chars):
+                    if kmer_list[pos] == char:
+                        is_true_mismatch = False
+                        break
+                
+                if is_true_mismatch:
+                    mutated_kmer = kmer_list.copy()
+                    for pos, char in zip(positions, replacement_chars):
+                        mutated_kmer[pos] = char
+                    
+                    neighborhood.add("".join(mutated_kmer))
+                    
     return list(neighborhood)
 
 def mismatch_analyzer(sequence: str, k: int, m: int = 1) -> List[str]:
@@ -45,13 +68,21 @@ def extract_features(sequences: List[str], k: int, m: int = 0) -> sp.csr_matrix:
         )
     return vectorizer.fit_transform(sequences)
 
-def _extract_and_scale_k(sequences: List[str], k: int, m: int, weight: float) -> sp.csr_matrix:
+def _extract_and_compute_gram_k(sequences: List[str], k: int, m: int, weight: float) -> np.ndarray:
     """
-    Helper function to extract features for a specific k-mer length and scale them.
+    Helper function to extract features for a specific k-mer length, scale them, 
+    and IMMEDIATELY compute the sub-Gram matrix. 
     Designed to be run in a separate process via joblib.
     """
+    # OPTIMIZATION 1: Short-circuit if the biological weight is 0
+    if weight == 0.0:
+        return np.zeros((len(sequences), len(sequences)), dtype=np.float64)
+        
     X_k = extract_features(sequences, k, m)
-    return X_k.multiply(np.sqrt(weight))
+    X_k = X_k.multiply(np.sqrt(weight))
+    
+    # Return the dense N x N Gram matrix directly, discarding the massive sparse features
+    return X_k.dot(X_k.T).toarray()
 
 def mixed_string_kernel(
     sequences: List[str], 
@@ -59,38 +90,28 @@ def mixed_string_kernel(
     m: int = 0, 
     weights: Optional[List[float]] = None,
     n_jobs: int = -1
-) -> Tuple[np.ndarray, sp.csr_matrix]:
+) -> Tuple[np.ndarray, Optional[sp.csr_matrix]]:
     """
     Computes the fused Gram matrix for k-mers from k=1 up to k_max in parallel.
-    
-    Args:
-        sequences: List of string sequences.
-        k_max: Maximum k-mer length.
-        m: Number of allowed mismatches (0 = Spectrum Kernel, >0 = Mismatch Kernel).
-        weights: Weights to scale each k-th sub-kernel.
-        n_jobs: Number of CPU cores to use for parallel extraction (-1 uses all cores).
-        
-    Returns:
-        composite_matrix: The dense fused Gram matrix.
-        X_composite_sparse: The concatenated sparse feature matrix.
+    Optimized for low-RAM execution by summing sub-Gram matrices instead of hstacking features.
     """
     if weights is None:
         weights = [1.0] * k_max
         
-    # If using mismatches (m>0), k=1 and k=2 with 1 mismatch are pure noise.
     start_k = max(1, m + 1) if m > 0 else 1
     
-    # PARALLELIZATION: Compute each k-mer sub-kernel concurrently using Process-based parallelism
-    all_sparse_features = Parallel(n_jobs=n_jobs)(
-        delayed(_extract_and_scale_k)(sequences, k, m, weights[k-1]) 
+    # Compute each k-mer sub-Gram matrix concurrently using Process-based parallelism
+    sub_grams = Parallel(n_jobs=n_jobs)(
+        delayed(_extract_and_compute_gram_k)(sequences, k, m, weights[k-1]) 
         for k in range(start_k, k_max + 1)
     )
 
-    # Reassemble the results returned from the separate worker processes
-    X_composite_sparse = sp.hstack(all_sparse_features, format='csr')
-    composite_matrix = X_composite_sparse.dot(X_composite_sparse.T).toarray()
+    # OPTIMIZATION 2: Sum the (N x N) dense matrices. 
+    # This keeps memory strictly bound to O(N^2) regardless of how massive the feature space gets.
+    composite_matrix = sum(sub_grams)
     
-    return composite_matrix, X_composite_sparse
+    # We return None for the sparse matrix to save RAM, as it is not used in the evaluation pipeline
+    return composite_matrix, None
 
 def normalize_gram(K: np.ndarray) -> np.ndarray:
     """

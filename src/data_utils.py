@@ -79,6 +79,29 @@ class MMapFastaReader:
     pass
 
 
+import re
+
+def clean_sequence(sequence):
+    """
+    Replaces non-standard IUPAC ambiguity codes (like M, H, K, etc.) with 'N'.
+    This prevents the string kernel's feature vocabulary from artificially exploding.
+    """
+    return re.sub(r'[^ACGT]', 'N', sequence.upper())
+
+def chunk_sequence(sequence, chunk_size=200):
+    """
+    Breaks a sequence into chunks. 
+    Handles variable-length reads: if a sequence is shorter than chunk_size, 
+    it is kept as a single smaller chunk.
+    """
+    seq_clean = clean_sequence(sequence)
+    
+    if len(seq_clean) <= chunk_size:
+        return [seq_clean]
+        
+    return [seq_clean[i:i+chunk_size] for i in range(0, len(seq_clean), chunk_size)]
+
+
 def load_clinical_data(
     normal_fasta: str, 
     tumor_fasta: str, 
@@ -88,21 +111,23 @@ def load_clinical_data(
     Loads real patient FASTA files. 
     Splits the Normal (Z) file into a train set and a healthy test set.
     Uses the Tumor (T) file as the anomalous test set.
+    Automatically cleans sequences of IUPAC ambiguity codes.
     """
     print(f"Loading Matched Normal file: {normal_fasta}")
     normal_reader = MMapFastaReader(normal_fasta)
-    normal_seqs = [normal_reader.get_seq(i) for i in range(len(normal_reader.offsets))]
+    normal_seqs_raw = [normal_reader.get_seq(i) for i in range(len(normal_reader.offsets))]
     normal_reader.close()
     
-    # Filter out any None values if the index had errors
-    normal_seqs = [s for s in normal_seqs if s is not None]
+    # Filter out any None values AND clean the valid sequences
+    normal_seqs = [clean_sequence(s) for s in normal_seqs_raw if s is not None]
 
     print(f"Loading Tumor file: {tumor_fasta}")
     tumor_reader = MMapFastaReader(tumor_fasta)
-    tumor_seqs = [tumor_reader.get_seq(i) for i in range(len(tumor_reader.offsets))]
+    tumor_seqs_raw = [tumor_reader.get_seq(i) for i in range(len(tumor_reader.offsets))]
     tumor_reader.close()
     
-    tumor_seqs = [s for s in tumor_seqs if s is not None]
+    # Filter out any None values AND clean the valid sequences
+    tumor_seqs = [clean_sequence(s) for s in tumor_seqs_raw if s is not None]
 
     # --- Train/Test Split ---
     # We use e.g., 80% of the healthy data to build the baseline model
@@ -119,84 +144,4 @@ def load_clinical_data(
     
     print(f"Loaded {len(train_data)} Train (Normal), {len(test_healthy_data)} Test (Normal), {len(test_cancer_data)} Test (Tumor)")
     
-    return train_data, test_data, y_test_true
-
-
-def _vectorized_sequence_generator(
-    num_sequences: int, 
-    length_range: Tuple[int, int], 
-    bases: List[str], 
-    probs: List[float]
-) -> List[str]:
-    """
-    Generates random DNA sequences efficiently using a vectorized 2D NumPy array.
-    This minimizes the overhead of calling np.random repeatedly in a Python loop.
-    
-    Args:
-        num_sequences: The number of sequences to generate.
-        length_range: A tuple of (min_length, max_length).
-        bases: List of characters representing the DNA alphabet.
-        probs: List of probabilities corresponding to each base.
-        
-    Returns:
-        A list of generated DNA sequences.
-    """
-    if num_sequences == 0:
-        return []
-        
-    # 1. Determine the length of each individual sequence
-    lengths = np.random.randint(length_range[0], length_range[1] + 1, size=num_sequences)
-    max_len = np.max(lengths)
-    
-    # 2. Generate a massive 2D matrix of characters all at once (C-level speed)
-    # Shape will be (num_sequences, max_len)
-    char_matrix = np.random.choice(bases, size=(num_sequences, max_len), p=probs)
-    
-    # 3. Join the characters row by row, truncating at the specific random length 
-    # assigned to that sequence in step 1.
-    return ["".join(row[:l]) for row, l in zip(char_matrix, lengths)]
-
-def generate_simulated_data(
-    num_train: int = 4000,
-    num_test_healthy: int = 950,
-    num_test_cancer: int = 50,
-    random_state: int = 42
-) -> Tuple[List[str], List[str], np.ndarray]:
-    """
-    Generates synthetic DNA sequences simulating a strictly healthy baseline
-    and a liquid biopsy test set containing both healthy and cancerous sequences.
-
-    Args:
-        num_train: Number of purely healthy sequences for the training set.
-        num_test_healthy: Number of healthy sequences in the test set.
-        num_test_cancer: Number of anomalous (cancer) sequences in the test set.
-        random_state: Random seed for reproducibility.
-
-    Returns:
-        train_data: List of healthy DNA sequences.
-        test_data: List of test DNA sequences (mixed).
-        y_test_true: Array of ground truth labels (1 for normal, -1 for anomaly).
-    """
-    np.random.seed(random_state)
-    bases = ['A', 'C', 'G', 'T', 'M']
-    
-    # Slight distribution shifts simulate the difference between healthy and mutated DNA
-    healthy_probs = [0.28, 0.20, 0.22, 0.28, 0.02]
-    cancer_probs  = [0.20, 0.20, 0.20, 0.20, 0.20]
-    
-    # Sequence length boundaries
-    length_range = (120, 180)
-
-    # Fast Vectorized Generation
-    train_data = _vectorized_sequence_generator(num_train, length_range, bases, healthy_probs)
-    test_healthy_data = _vectorized_sequence_generator(num_test_healthy, length_range, bases, healthy_probs)
-    test_cancer_data = _vectorized_sequence_generator(num_test_cancer, length_range, bases, cancer_probs)
-
-    # Combine testing data
-    test_data = test_healthy_data + test_cancer_data
-    
-    # Generate ground truth labels (1 = Inlier/Healthy, -1 = Outlier/Cancer)
-    # Matches the standard scikit-learn OneClassSVM anomaly output
-    y_test_true = np.array([1] * num_test_healthy + [-1] * num_test_cancer)
-
     return train_data, test_data, y_test_true
