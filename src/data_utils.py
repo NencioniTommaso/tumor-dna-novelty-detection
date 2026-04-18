@@ -1,7 +1,8 @@
 """
 data_utils.py
 Handles data simulation and generation for DNA sequence anomaly detection.
-Optimized with vectorized NumPy operations for fast, large-scale dataset generation.
+Optimized with vectorized NumPy operations for fast, large-scale dataset generation,
+and Numba JIT compilation to eliminate I/O parsing bottlenecks.
 """
 
 import numpy as np
@@ -11,10 +12,34 @@ import os
 import mmap
 from array import array
 import pysam
+import re
+
+from numba import njit
+
+# --- NUMBA OPTIMIZATION ---
+# @njit forces this function to compile to raw machine code. 
+# It loops through the memory map array and filters out newlines (ASCII 10) 
+# at C-like speeds, bypassing the Python Global Interpreter Lock (GIL).
+@njit
+def _extract_sequence_fast(mmap_array: np.ndarray, offset: int, seq_len: int):
+    # Allocate a flat array to hold the clean bytes
+    buf = np.empty(seq_len, dtype=np.uint8)
+    pos = offset
+    read = 0
+    max_len = len(mmap_array)
+    
+    while read < seq_len and pos < max_len:
+        c = mmap_array[pos]
+        if c != 10:  # Ignore '\n'
+            buf[read] = c
+            read += 1
+        pos += 1
+        
+    return buf, read
 
 class MMapFastaReader:
     """
-    Reader FASTA ultra-veloce basato su mmap + .fai index.
+    Reader FASTA ultra-veloce basato su mmap + .fai index + Numba JIT.
     L'indice è memorizzato in due array di tipo C per minimizzare il footprint.
     """
 
@@ -24,11 +49,11 @@ class MMapFastaReader:
             print(f"Indice .fai non trovato, lo creo: {fai_path}")
             pysam.faidx(fasta_path)
 
-        # Array C per offset (unsigned long long, 8 byte) e length (unsigned int, 4 byte)
+        # C Array (unsigned long long, 8 byte), length (unsigned int, 4 byte)
         self.offsets = array('Q')
         self.lengths = array('I')
 
-        # Popola gli array leggendo il .fai
+        # write the .fai data into the C arrays for fast access
         with open(fai_path, 'r') as f:
             for line in f:
                 parts = line.rstrip('\n').split('\t')
@@ -36,9 +61,12 @@ class MMapFastaReader:
                 self.offsets.append(int(parts[2]))
                 self.lengths.append(int(parts[1]))
 
-        # Apri il FASTA in binario e crea la memory‐map
+        # Open the FASTA file and create a memory map for zero-copy access
         self._file = open(fasta_path, 'rb')
         self._mmap = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
+        
+        # Expose the memory map to NumPy for Numba (zero-copy overhead)
+        self._mmap_array = np.frombuffer(self._mmap, dtype=np.uint8)
 
     def get_seq(self, seq_idx: int) -> str | None:
         if seq_idx < 0 or seq_idx >= len(self.offsets):
@@ -49,17 +77,10 @@ class MMapFastaReader:
         offset = self.offsets[seq_idx]
         seq_len = self.lengths[seq_idx]
 
-        pos = offset
-        read = 0
-        buf = bytearray(seq_len)
-        while read < seq_len and pos < len(self._mmap):
-            c = self._mmap[pos]
-            if c != 10:
-                buf[read] = c
-                read += 1
-            pos += 1
+        # Call the optimized Numba function
+        buf_array, read = _extract_sequence_fast(self._mmap_array, offset, seq_len)
 
-        # CONTROLLO: hai letto tutti i caratteri?
+        # Check if we read the expected number of characters (sanity check for corrupted .fai)
         if read < seq_len:
             import logging
             logging.error(
@@ -69,17 +90,19 @@ class MMapFastaReader:
             )
             return None
 
-        return buf.decode('ascii')
+        # Convert the numpy array back to bytes and decode
+        return buf_array.tobytes().decode('ascii')
 
     def close(self):
         """Chiude la mappa e il file handle."""
+        # 1. Delete the NumPy array reference to release the exported memory pointer
+        if hasattr(self, '_mmap_array'):
+            del self._mmap_array
+            
+        # 2. Now it is safe to close the memory map and the file
         self._mmap.close()
         self._file.close()
-    
-    pass
 
-
-import re
 
 def clean_sequence(sequence):
     """
@@ -87,6 +110,7 @@ def clean_sequence(sequence):
     This prevents the string kernel's feature vocabulary from artificially exploding.
     """
     return re.sub(r'[^ACGT]', 'N', sequence.upper())
+
 
 def chunk_sequence(sequence, chunk_size=200):
     """
