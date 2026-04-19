@@ -104,72 +104,6 @@ class MMapFastaReader:
         self._file.close()
 
 
-def clean_sequence(sequence):
-    """
-    Replaces non-standard IUPAC ambiguity codes (like M, H, K, etc.) with 'N'.
-    This prevents the string kernel's feature vocabulary from artificially exploding.
-    """
-    return re.sub(r'[^ACGT]', 'N', sequence.upper())
-
-
-def chunk_sequence(sequence, chunk_size=200):
-    """
-    Breaks a sequence into chunks. 
-    Handles variable-length reads: if a sequence is shorter than chunk_size, 
-    it is kept as a single smaller chunk.
-    """
-    seq_clean = clean_sequence(sequence)
-    
-    if len(seq_clean) <= chunk_size:
-        return [seq_clean]
-        
-    return [seq_clean[i:i+chunk_size] for i in range(0, len(seq_clean), chunk_size)]
-
-
-def load_clinical_data(
-    normal_fasta: str, 
-    tumor_fasta: str, 
-    train_ratio: float = 0.8
-) -> Tuple[List[str], List[str], np.ndarray]:
-    """
-    Loads real patient FASTA files. 
-    Splits the Normal (Z) file into a train set and a healthy test set.
-    Uses the Tumor (T) file as the anomalous test set.
-    Automatically cleans sequences of IUPAC ambiguity codes.
-    """
-    print(f"Loading Matched Normal file: {normal_fasta}")
-    normal_reader = MMapFastaReader(normal_fasta)
-    normal_seqs_raw = [normal_reader.get_seq(i) for i in range(len(normal_reader.offsets))]
-    normal_reader.close()
-    
-    # Filter out any None values AND clean the valid sequences
-    normal_seqs = [clean_sequence(s) for s in normal_seqs_raw if s is not None]
-
-    print(f"Loading Tumor file: {tumor_fasta}")
-    tumor_reader = MMapFastaReader(tumor_fasta)
-    tumor_seqs_raw = [tumor_reader.get_seq(i) for i in range(len(tumor_reader.offsets))]
-    tumor_reader.close()
-    
-    # Filter out any None values AND clean the valid sequences
-    tumor_seqs = [clean_sequence(s) for s in tumor_seqs_raw if s is not None]
-
-    # --- Train/Test Split ---
-    # We use e.g., 80% of the healthy data to build the baseline model
-    num_train = int(len(normal_seqs) * train_ratio)
-    
-    train_data = normal_seqs[:num_train]
-    test_healthy_data = normal_seqs[num_train:]
-    test_cancer_data = tumor_seqs
-    
-    test_data = test_healthy_data + test_cancer_data
-    
-    # Ground truth labels for evaluation: 1 for normal, -1 for tumor
-    y_test_true = np.array([1] * len(test_healthy_data) + [-1] * len(test_cancer_data))
-    
-    print(f"Loaded {len(train_data)} Train (Normal), {len(test_healthy_data)} Test (Normal), {len(test_cancer_data)} Test (Tumor)")
-    
-    return train_data, test_data, y_test_true
-
 def load_patient_cohort(
     train_normal_files: List[str], 
     test_normal_files: List[str], 
@@ -232,3 +166,24 @@ def load_patient_cohort(
     print(f"Total Combined: {len(train_data) + len(test_data)} sequences")
     
     return train_data, test_data, y_test_true
+
+def clean_sequence(sequence):
+    """
+    Replaces non-standard IUPAC ambiguity codes (like M, H, K, etc.) with 'N'.
+    This prevents the string kernel's feature vocabulary from artificially exploding.
+    """
+    return re.sub(r'[^ACGT]', 'N', sequence.upper())
+
+
+def chunk_sequence(sequence, chunk_size=200):
+    """
+    Breaks a sequence into chunks. 
+    Handles variable-length reads: if a sequence is shorter than chunk_size, 
+    it is kept as a single smaller chunk.
+    """
+    seq_clean = clean_sequence(sequence)
+    
+    if len(seq_clean) <= chunk_size:
+        return [seq_clean]
+        
+    return [seq_clean[i:i+chunk_size] for i in range(0, len(seq_clean), chunk_size)]
