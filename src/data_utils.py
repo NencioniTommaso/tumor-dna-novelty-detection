@@ -169,3 +169,66 @@ def load_clinical_data(
     print(f"Loaded {len(train_data)} Train (Normal), {len(test_healthy_data)} Test (Normal), {len(test_cancer_data)} Test (Tumor)")
     
     return train_data, test_data, y_test_true
+
+def load_patient_cohort(
+    train_normal_files: List[str], 
+    test_normal_files: List[str], 
+    test_tumor_files: List[str],
+    max_train: int = 5000,
+    max_test_normal: int = 2500,
+    max_test_tumor: int = 2500,
+    random_seed: int = 42
+) -> Tuple[List[str], List[str], np.ndarray]:
+    """
+    Loads patient FASTA files and creates the split.
+    Uses index-level random sampling to efficiently create balanced train/test sets without loading entire files into memory.
+    """
+    np.random.seed(random_seed)
+    
+    def _read_sampled_files(file_list: List[str], desc: str, max_total_seqs: int) -> List[str]:
+        if not file_list:
+            return []
+            
+        seqs_per_file = max_total_seqs // len(file_list)
+        all_seqs = []
+        
+        for file_path in file_list:
+            print(f"  -> Loading {desc}: {os.path.basename(file_path)} (Target: {seqs_per_file} seqs)")
+            reader = MMapFastaReader(file_path)
+            total_available = len(reader.offsets)
+            
+            # Determine how many sequences we can safely sample
+            num_to_sample = min(seqs_per_file, total_available)
+            
+            # Fast index sampling: pick random indices without replacement
+            sampled_indices = np.random.choice(total_available, num_to_sample, replace=False)
+            
+            # Extract ONLY the sampled sequences
+            raw_seqs = [reader.get_seq(i) for i in sampled_indices]
+            reader.close()
+            
+            # Clean sequences and drop any Nones
+            clean_seqs = [clean_sequence(s) for s in raw_seqs if s is not None]
+            all_seqs.extend(clean_seqs)
+            
+        return all_seqs
+
+    print("\n--- Loading Training Data (Healthy Baseline) ---")
+    train_data = _read_sampled_files(train_normal_files, "Train (Normal)", max_train)
+    
+    print("\n--- Loading Testing Data (Inliers & Outliers) ---")
+    test_healthy_data = _read_sampled_files(test_normal_files, "Test (Normal)", max_test_normal)
+    test_cancer_data = _read_sampled_files(test_tumor_files, "Test (Tumor)", max_test_tumor)
+    
+    test_data = test_healthy_data + test_cancer_data
+    
+    # Ground truth labels: 1 for normal, -1 for tumor
+    y_test_true = np.array([1] * len(test_healthy_data) + [-1] * len(test_cancer_data))
+    
+    print(f"\n[Data Load Complete]")
+    print(f"Train (Normal): {len(train_data)} sequences")
+    print(f"Test  (Normal): {len(test_healthy_data)} sequences")
+    print(f"Test  (Tumor) : {len(test_cancer_data)} sequences")
+    print(f"Total Combined: {len(train_data) + len(test_data)} sequences")
+    
+    return train_data, test_data, y_test_true
