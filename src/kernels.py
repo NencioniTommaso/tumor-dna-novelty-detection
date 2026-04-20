@@ -68,21 +68,49 @@ def extract_features(sequences: List[str], k: int, m: int = 0) -> sp.csr_matrix:
         )
     return vectorizer.fit_transform(sequences)
 
-def _extract_and_compute_gram_k(sequences: List[str], k: int, m: int, weight: float) -> np.ndarray:
+def _compute_gram_block(X_csr: sp.csr_matrix, row_start: int, row_end: int) -> np.ndarray:
     """
-    Helper function to extract features for a specific k-mer length, scale them, 
-    and IMMEDIATELY compute the sub-Gram matrix. 
-    Designed to be run in a separate process via joblib.
+    Computes a horizontal slice of the Gram matrix: K[row_start:row_end, :].
+    X_csr must already be weighted. Each block is fully independent.
     """
-    # OPTIMIZATION 1: Short-circuit if the biological weight is 0
+    return X_csr[row_start:row_end].dot(X_csr.T).toarray()
+
+
+def _extract_and_compute_gram_k(
+    sequences: List[str], 
+    k: int, 
+    m: int, 
+    weight: float,
+    n_inner_jobs: int = 1,      # how many cores to use inside this k-task
+    block_size: int = 2000       # rows per block for the inner parallelism
+) -> np.ndarray:
+    """
+    Extracts features for a specific k (single pass), then computes the
+    full sub-Gram matrix by parallelizing the dot product across row blocks.
+    """
     if weight == 0.0:
         return np.zeros((len(sequences), len(sequences)), dtype=np.float64)
-        
+
+    # Feature extraction: done ONCE, O(N) — this does not change
     X_k = extract_features(sequences, k, m)
     X_k = X_k.multiply(np.sqrt(weight))
     
-    # Return the dense N x N Gram matrix directly, discarding the massive sparse features
-    return X_k.dot(X_k.T).toarray()
+    N = X_k.shape[0]
+    
+    # If only one inner job (small k, fast anyway), skip the overhead
+    if n_inner_jobs == 1 or N <= block_size:
+        return X_k.dot(X_k.T).toarray()
+    
+    # Build row-block ranges
+    ranges = [(i, min(i + block_size, N)) for i in range(0, N, block_size)]
+    
+    # Parallelize the dot product: each worker gets one row slice
+    blocks = Parallel(n_jobs=n_inner_jobs, prefer="threads")(
+        delayed(_compute_gram_block)(X_k, start, end)
+        for start, end in ranges
+    )
+    
+    return np.vstack(blocks)
 
 def mixed_string_kernel(
     sequences: List[str], 
@@ -91,27 +119,35 @@ def mixed_string_kernel(
     weights: Optional[List[float]] = None,
     n_jobs: int = -1
 ) -> Tuple[np.ndarray, Optional[sp.csr_matrix]]:
-    """
-    Computes the fused Gram matrix for k-mers from k=1 up to k_max in parallel.
-    Optimized for low-RAM execution by summing sub-Gram matrices instead of hstacking features.
-    """
+    
     if weights is None:
         weights = [1.0] * k_max
-        
+
     start_k = max(1, m + 1) if m > 0 else 1
+    active_ks = [k for k in range(start_k, k_max + 1) if weights[k-1] != 0.0]
     
-    # Compute each k-mer sub-Gram matrix concurrently using Process-based parallelism
+    import os
+    total_cores = os.cpu_count() if n_jobs == -1 else n_jobs
+    
+    # Heuristic: assign more inner cores to larger k-values (they cost more)
+    # Small k (<=3): run on 1 core, they're fast enough
+    # Large k (>3):  split remaining cores between them
+    large_ks = [k for k in active_ks if k > 3]
+    n_outer = max(1, len(large_ks))     # how many large-k jobs run "concurrently"
+    inner_cores = max(1, total_cores // n_outer)
+
+    def _jobs_for_k(k):
+        return inner_cores if k > 3 else 1
+
     sub_grams = Parallel(n_jobs=n_jobs)(
-        delayed(_extract_and_compute_gram_k)(sequences, k, m, weights[k-1]) 
-        for k in range(start_k, k_max + 1)
+        delayed(_extract_and_compute_gram_k)(
+            sequences, k, m, weights[k-1], 
+            n_inner_jobs=_jobs_for_k(k)
+        )
+        for k in active_ks
     )
 
-    # OPTIMIZATION 2: Sum the (N x N) dense matrices. 
-    # This keeps memory strictly bound to O(N^2) regardless of how massive the feature space gets.
-    composite_matrix = sum(sub_grams)
-    
-    # We return None for the sparse matrix to save RAM, as it is not used in the evaluation pipeline
-    return composite_matrix, None
+    return sum(sub_grams), None
 
 def normalize_gram(K: np.ndarray) -> np.ndarray:
     """
