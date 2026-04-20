@@ -1,9 +1,8 @@
 """
 kernels.py
 Contains sequence feature extraction, mismatch generation, and Gram matrix computation.
-Optimized for multi-core execution using joblib.
+Optimized for multi-core execution using joblib with a Symmetric Block Strategy.
 """
-
 
 import itertools
 from functools import lru_cache
@@ -68,49 +67,61 @@ def extract_features(sequences: List[str], k: int, m: int = 0) -> sp.csr_matrix:
         )
     return vectorizer.fit_transform(sequences)
 
-def _compute_gram_block(X_csr: sp.csr_matrix, row_start: int, row_end: int) -> np.ndarray:
+def _compute_gram_block_pair(X_csr: sp.csr_matrix, r_start: int, r_end: int, c_start: int, c_end: int):
     """
-    Computes a horizontal slice of the Gram matrix: K[row_start:row_end, :].
-    X_csr must already be weighted. Each block is fully independent.
+    Computes a rectangular block intersection of the Gram matrix: K[r_start:r_end, c_start:c_end]
     """
-    return X_csr[row_start:row_end].dot(X_csr.T).toarray()
+    block_val = X_csr[r_start:r_end].dot(X_csr[c_start:c_end].T).toarray()
+    return r_start, r_end, c_start, c_end, block_val
 
-
-def _extract_and_compute_gram_k(
+def _extract_and_compute_gram_k_symmetric(
     sequences: List[str], 
     k: int, 
     m: int, 
     weight: float,
-    n_inner_jobs: int = 1,      # how many cores to use inside this k-task
-    block_size: int = 2000       # rows per block for the inner parallelism
+    n_inner_jobs: int = -1,
+    block_size: int = 1500
 ) -> np.ndarray:
-    """
-    Extracts features for a specific k (single pass), then computes the
-    full sub-Gram matrix by parallelizing the dot product across row blocks.
-    """
+    
     if weight == 0.0:
         return np.zeros((len(sequences), len(sequences)), dtype=np.float64)
 
-    # Feature extraction: done ONCE, O(N) — this does not change
+    # 1. Extract and scale features
     X_k = extract_features(sequences, k, m)
     X_k = X_k.multiply(np.sqrt(weight))
     
     N = X_k.shape[0]
+    K = np.zeros((N, N), dtype=np.float64)
     
-    # If only one inner job (small k, fast anyway), skip the overhead
-    if n_inner_jobs == 1 or N <= block_size:
-        return X_k.dot(X_k.T).toarray()
+    # Fast path for small datasets
+    if N <= block_size:
+        K_full = X_k.dot(X_k.T).toarray()
+        return K_full
     
-    # Build row-block ranges
+    # 2. Define block ranges
     ranges = [(i, min(i + block_size, N)) for i in range(0, N, block_size)]
     
-    # Parallelize the dot product: each worker gets one row slice
-    blocks = Parallel(n_jobs=n_inner_jobs, prefer="threads")(
-        delayed(_compute_gram_block)(X_k, start, end)
-        for start, end in ranges
+    # 3. Create tasks ONLY for the upper triangle of blocks (I <= J)
+    tasks = []
+    for i, (r_start, r_end) in enumerate(ranges):
+        for j, (c_start, c_end) in enumerate(ranges):
+            if j >= i: # Upper triangle of blocks
+                tasks.append((r_start, r_end, c_start, c_end))
+                
+    # 4. Execute block-pair multiplications in parallel
+    results = Parallel(n_jobs=n_inner_jobs, prefer="threads")(
+        delayed(_compute_gram_block_pair)(X_k, rs, re, cs, ce)
+        for rs, re, cs, ce in tasks
     )
     
-    return np.vstack(blocks)
+    # 5. Reassemble the symmetric matrix
+    for rs, re, cs, ce, block_val in results:
+        K[rs:re, cs:ce] = block_val
+        # Mirror to the lower triangle if it's an off-diagonal block
+        if rs != cs:
+            K[cs:ce, rs:re] = block_val.T
+            
+    return K
 
 def mixed_string_kernel(
     sequences: List[str], 
@@ -140,7 +151,7 @@ def mixed_string_kernel(
         return inner_cores if k > 3 else 1
 
     sub_grams = Parallel(n_jobs=n_jobs)(
-        delayed(_extract_and_compute_gram_k)(
+        delayed(_extract_and_compute_gram_k_symmetric)(
             sequences, k, m, weights[k-1], 
             n_inner_jobs=_jobs_for_k(k)
         )

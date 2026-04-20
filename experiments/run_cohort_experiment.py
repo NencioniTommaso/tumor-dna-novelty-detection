@@ -43,7 +43,8 @@ def main():
     print(" COLON CANCER SOMATIC DETECTION: PATIENT COHORT TEST")
     print("=====================================================")
     
-    data_dir = os.path.join(project_root, 'data')
+    #data_dir = os.path.join(project_root, 'data')
+    data_dir = "/home/tommy/code/innocenti/evaluation_dna_strings/data"
     
     # --- 1. Define the Patient-Level Split ---
     train_normal_files = [
@@ -77,9 +78,9 @@ def main():
         train_normal_files, 
         test_normal_files, 
         test_tumor_files,
-        max_train=5000,
-        max_test_normal=2500,
-        max_test_tumor=2500,
+        max_train=14000,
+        max_test_normal=1500,
+        max_test_tumor=1500,
         random_seed=42  # Ensures reproducibility across experiment runs
     )
     
