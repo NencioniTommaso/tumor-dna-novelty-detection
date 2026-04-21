@@ -32,6 +32,7 @@ IUPAC_MAP = {
     'N': ['A', 'C', 'G', 'T']
 }
 
+@lru_cache(maxsize=100000)
 def resolve_ambiguous_kmer(kmer: str) -> List[str]:
     """
     Expands an ambiguous k-mer into all its exact biological possibilities.
