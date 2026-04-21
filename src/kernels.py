@@ -2,6 +2,9 @@
 kernels.py
 Contains sequence feature extraction, mismatch generation, and Gram matrix computation.
 Optimized for multi-core execution using joblib with a Symmetric Block Strategy.
+
+Upgraded with Combinatorial Expansion for IUPAC ambiguity codes, ensuring accurate
+biological representation without feature space explosion.
 """
 
 import itertools
@@ -13,11 +16,36 @@ from sklearn.feature_extraction.text import CountVectorizer
 from joblib import Parallel, delayed
 from typing import List, Tuple, Optional
 
+# Standard IUPAC ambiguity mapping
+IUPAC_MAP = {
+    'A': ['A'], 'C': ['C'], 'G': ['G'], 'T': ['T'],
+    'M': ['A', 'C'],
+    'R': ['A', 'G'],
+    'W': ['A', 'T'],
+    'S': ['C', 'G'],
+    'Y': ['C', 'T'],
+    'K': ['G', 'T'],
+    'V': ['A', 'C', 'G'],
+    'H': ['A', 'C', 'T'],
+    'D': ['A', 'G', 'T'],
+    'B': ['C', 'G', 'T'],
+    'N': ['A', 'C', 'G', 'T']
+}
+
+def resolve_ambiguous_kmer(kmer: str) -> List[str]:
+    """
+    Expands an ambiguous k-mer into all its exact biological possibilities.
+    Example: 'ATM' -> ['ATA', 'ATC']
+    """
+    possible_bases = [IUPAC_MAP.get(char.upper(), ['N']) for char in kmer]
+    return ["".join(combo) for combo in itertools.product(*possible_bases)]
+
 @lru_cache(maxsize=100000)
-def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: Tuple[str, ...] = ('A', 'C', 'G', 'T', 'M')) -> List[str]:
+def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: Tuple[str, ...] = ('A', 'C', 'G', 'T')) -> List[str]:
     """
     Generates all k-mers within 'm' mismatches of the given kmer.
     Upgraded to use itertools for exact mutational combinations and LRU Cache for speed.
+    The alphabet strictly defaults to the 4 standard bases.
     """
     if m == 0:
         return [kmer]
@@ -46,25 +74,35 @@ def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: Tuple[str, .
     return list(neighborhood)
 
 def mismatch_analyzer(sequence: str, k: int, m: int = 1) -> List[str]:
-    """Custom analyzer for CountVectorizer to expand sequences into mutational neighborhoods."""
-    kmers = [sequence[i:i+k] for i in range(len(sequence)-k+1)]
+    """
+    Custom analyzer for CountVectorizer to expand sequences:
+    1. Extracts raw k-mers.
+    2. Resolves biological ambiguities (e.g., M, R, Y) into standard bases.
+    3. Generates the mismatch neighborhood using standard bases.
+    """
+    raw_kmers = [sequence[i:i+k] for i in range(len(sequence)-k+1)]
+    
     expanded_kmers = []
-    for kmer in kmers:
-        expanded_kmers.extend(generate_mismatch_neighborhood(kmer, m=m))
+    for raw_kmer in raw_kmers:
+        # Step 1: Resolve IUPAC ambiguities first
+        resolved_exact_kmers = resolve_ambiguous_kmer(raw_kmer)
+        
+        # Step 2: Apply mismatch generation ONLY to standard A,C,G,T strings
+        for exact_kmer in resolved_exact_kmers:
+            expanded_kmers.extend(generate_mismatch_neighborhood(exact_kmer, m=m, alphabet=('A', 'C', 'G', 'T')))
+            
     return expanded_kmers
 
 def extract_features(sequences: List[str], k: int, m: int = 0) -> sp.csr_matrix:
     """
-    Extracts sequence features using either exact k-mers (Spectrum, m=0) 
-    or relaxed k-mers (Mismatch, m>0).
+    Extracts sequence features. 
+    Even if m=0 (Spectrum Kernel), we route through the custom analyzer 
+    to ensure IUPAC ambiguity codes are combinatorially resolved.
     """
-    if m == 0:
-        vectorizer = CountVectorizer(analyzer='char', ngram_range=(k, k), lowercase=False)
-    else:
-        vectorizer = CountVectorizer(
-            analyzer=lambda x: mismatch_analyzer(x, k=k, m=m), 
-            lowercase=False
-        )
+    vectorizer = CountVectorizer(
+        analyzer=lambda x: mismatch_analyzer(x, k=k, m=m), 
+        lowercase=False
+    )
     return vectorizer.fit_transform(sequences)
 
 def _compute_gram_block_pair(X_csr: sp.csr_matrix, r_start: int, r_end: int, c_start: int, c_end: int):
@@ -141,8 +179,6 @@ def mixed_string_kernel(
     total_cores = os.cpu_count() if n_jobs == -1 else n_jobs
     
     # Heuristic: assign more inner cores to larger k-values (they cost more)
-    # Small k (<=3): run on 1 core, they're fast enough
-    # Large k (>3):  split remaining cores between them
     large_ks = [k for k in active_ks if k > 3]
     n_outer = max(1, len(large_ks))     # how many large-k jobs run "concurrently"
     inner_cores = max(1, total_cores // n_outer)

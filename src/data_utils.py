@@ -166,24 +166,3 @@ def load_patient_cohort(
     print(f"Total Combined: {len(train_data) + len(test_data)} sequences")
     
     return train_data, test_data, y_test_true
-
-def clean_sequence(sequence):
-    """
-    Replaces non-standard IUPAC ambiguity codes (like M, H, K, etc.) with 'N'.
-    This prevents the string kernel's feature vocabulary from artificially exploding.
-    """
-    return re.sub(r'[^ACGT]', 'N', sequence.upper())
-
-
-def chunk_sequence(sequence, chunk_size=200):
-    """
-    Breaks a sequence into chunks. 
-    Handles variable-length reads: if a sequence is shorter than chunk_size, 
-    it is kept as a single smaller chunk.
-    """
-    seq_clean = clean_sequence(sequence)
-    
-    if len(seq_clean) <= chunk_size:
-        return [seq_clean]
-        
-    return [seq_clean[i:i+chunk_size] for i in range(0, len(seq_clean), chunk_size)]
