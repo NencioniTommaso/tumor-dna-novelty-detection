@@ -1,9 +1,11 @@
 """
 kernels.py
 Contains sequence feature extraction, mismatch generation, and Gram matrix computation.
-Optimized for multi-core execution using joblib.
-"""
+Optimized for multi-core execution using joblib with a Symmetric Block Strategy.
 
+Upgraded with Combinatorial Expansion for IUPAC ambiguity codes, ensuring accurate
+biological representation without feature space explosion.
+"""
 
 import itertools
 from functools import lru_cache
@@ -14,11 +16,37 @@ from sklearn.feature_extraction.text import CountVectorizer
 from joblib import Parallel, delayed
 from typing import List, Tuple, Optional
 
+# Standard IUPAC ambiguity mapping
+IUPAC_MAP = {
+    'A': ['A'], 'C': ['C'], 'G': ['G'], 'T': ['T'],
+    'M': ['A', 'C'],
+    'R': ['A', 'G'],
+    'W': ['A', 'T'],
+    'S': ['C', 'G'],
+    'Y': ['C', 'T'],
+    'K': ['G', 'T'],
+    'V': ['A', 'C', 'G'],
+    'H': ['A', 'C', 'T'],
+    'D': ['A', 'G', 'T'],
+    'B': ['C', 'G', 'T'],
+    'N': ['A', 'C', 'G', 'T']
+}
+
 @lru_cache(maxsize=100000)
-def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: Tuple[str, ...] = ('A', 'C', 'G', 'T', 'M')) -> List[str]:
+def resolve_ambiguous_kmer(kmer: str) -> List[str]:
+    """
+    Expands an ambiguous k-mer into all its exact biological possibilities.
+    Example: 'ATM' -> ['ATA', 'ATC']
+    """
+    possible_bases = [IUPAC_MAP.get(char.upper(), ['N']) for char in kmer]
+    return ["".join(combo) for combo in itertools.product(*possible_bases)]
+
+@lru_cache(maxsize=100000)
+def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: Tuple[str, ...] = ('A', 'C', 'G', 'T')) -> List[str]:
     """
     Generates all k-mers within 'm' mismatches of the given kmer.
     Upgraded to use itertools for exact mutational combinations and LRU Cache for speed.
+    The alphabet strictly defaults to the 4 standard bases.
     """
     if m == 0:
         return [kmer]
@@ -47,42 +75,92 @@ def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: Tuple[str, .
     return list(neighborhood)
 
 def mismatch_analyzer(sequence: str, k: int, m: int = 1) -> List[str]:
-    """Custom analyzer for CountVectorizer to expand sequences into mutational neighborhoods."""
-    kmers = [sequence[i:i+k] for i in range(len(sequence)-k+1)]
+    """
+    Custom analyzer for CountVectorizer to expand sequences:
+    1. Extracts raw k-mers.
+    2. Resolves biological ambiguities (e.g., M, R, Y) into standard bases.
+    3. Generates the mismatch neighborhood using standard bases.
+    """
+    raw_kmers = [sequence[i:i+k] for i in range(len(sequence)-k+1)]
+    
     expanded_kmers = []
-    for kmer in kmers:
-        expanded_kmers.extend(generate_mismatch_neighborhood(kmer, m=m))
+    for raw_kmer in raw_kmers:
+        # Step 1: Resolve IUPAC ambiguities first
+        resolved_exact_kmers = resolve_ambiguous_kmer(raw_kmer)
+        
+        # Step 2: Apply mismatch generation ONLY to standard A,C,G,T strings
+        for exact_kmer in resolved_exact_kmers:
+            expanded_kmers.extend(generate_mismatch_neighborhood(exact_kmer, m=m, alphabet=('A', 'C', 'G', 'T')))
+            
     return expanded_kmers
 
 def extract_features(sequences: List[str], k: int, m: int = 0) -> sp.csr_matrix:
     """
-    Extracts sequence features using either exact k-mers (Spectrum, m=0) 
-    or relaxed k-mers (Mismatch, m>0).
+    Extracts sequence features. 
+    Even if m=0 (Spectrum Kernel), we route through the custom analyzer 
+    to ensure IUPAC ambiguity codes are combinatorially resolved.
     """
-    if m == 0:
-        vectorizer = CountVectorizer(analyzer='char', ngram_range=(k, k), lowercase=False)
-    else:
-        vectorizer = CountVectorizer(
-            analyzer=lambda x: mismatch_analyzer(x, k=k, m=m), 
-            lowercase=False
-        )
+    vectorizer = CountVectorizer(
+        analyzer=lambda x: mismatch_analyzer(x, k=k, m=m), 
+        lowercase=False
+    )
     return vectorizer.fit_transform(sequences)
 
-def _extract_and_compute_gram_k(sequences: List[str], k: int, m: int, weight: float) -> np.ndarray:
+def _compute_gram_block_pair(X_csr: sp.csr_matrix, r_start: int, r_end: int, c_start: int, c_end: int):
     """
-    Helper function to extract features for a specific k-mer length, scale them, 
-    and IMMEDIATELY compute the sub-Gram matrix. 
-    Designed to be run in a separate process via joblib.
+    Computes a rectangular block intersection of the Gram matrix: K[r_start:r_end, c_start:c_end]
     """
-    # OPTIMIZATION 1: Short-circuit if the biological weight is 0
+    block_val = X_csr[r_start:r_end].dot(X_csr[c_start:c_end].T).toarray()
+    return r_start, r_end, c_start, c_end, block_val
+
+def _extract_and_compute_gram_k_symmetric(
+    sequences: List[str], 
+    k: int, 
+    m: int, 
+    weight: float,
+    n_inner_jobs: int = -1,
+    block_size: int = 1500
+) -> np.ndarray:
+    
     if weight == 0.0:
         return np.zeros((len(sequences), len(sequences)), dtype=np.float64)
-        
+
+    # 1. Extract and scale features
     X_k = extract_features(sequences, k, m)
     X_k = X_k.multiply(np.sqrt(weight))
     
-    # Return the dense N x N Gram matrix directly, discarding the massive sparse features
-    return X_k.dot(X_k.T).toarray()
+    N = X_k.shape[0]
+    K = np.zeros((N, N), dtype=np.float64)
+    
+    # Fast path for small datasets
+    if N <= block_size:
+        K_full = X_k.dot(X_k.T).toarray()
+        return K_full
+    
+    # 2. Define block ranges
+    ranges = [(i, min(i + block_size, N)) for i in range(0, N, block_size)]
+    
+    # 3. Create tasks ONLY for the upper triangle of blocks (I <= J)
+    tasks = []
+    for i, (r_start, r_end) in enumerate(ranges):
+        for j, (c_start, c_end) in enumerate(ranges):
+            if j >= i: # Upper triangle of blocks
+                tasks.append((r_start, r_end, c_start, c_end))
+                
+    # 4. Execute block-pair multiplications in parallel
+    results = Parallel(n_jobs=n_inner_jobs, prefer="threads")(
+        delayed(_compute_gram_block_pair)(X_k, rs, re, cs, ce)
+        for rs, re, cs, ce in tasks
+    )
+    
+    # 5. Reassemble the symmetric matrix
+    for rs, re, cs, ce, block_val in results:
+        K[rs:re, cs:ce] = block_val
+        # Mirror to the lower triangle if it's an off-diagonal block
+        if rs != cs:
+            K[cs:ce, rs:re] = block_val.T
+            
+    return K
 
 def mixed_string_kernel(
     sequences: List[str], 
@@ -91,27 +169,33 @@ def mixed_string_kernel(
     weights: Optional[List[float]] = None,
     n_jobs: int = -1
 ) -> Tuple[np.ndarray, Optional[sp.csr_matrix]]:
-    """
-    Computes the fused Gram matrix for k-mers from k=1 up to k_max in parallel.
-    Optimized for low-RAM execution by summing sub-Gram matrices instead of hstacking features.
-    """
+    
     if weights is None:
         weights = [1.0] * k_max
-        
+
     start_k = max(1, m + 1) if m > 0 else 1
+    active_ks = [k for k in range(start_k, k_max + 1) if weights[k-1] != 0.0]
     
-    # Compute each k-mer sub-Gram matrix concurrently using Process-based parallelism
+    import os
+    total_cores = os.cpu_count() if n_jobs == -1 else n_jobs
+    
+    # Heuristic: assign more inner cores to larger k-values (they cost more)
+    large_ks = [k for k in active_ks if k > 3]
+    n_outer = max(1, len(large_ks))     # how many large-k jobs run "concurrently"
+    inner_cores = max(1, total_cores // n_outer)
+
+    def _jobs_for_k(k):
+        return inner_cores if k > 3 else 1
+
     sub_grams = Parallel(n_jobs=n_jobs)(
-        delayed(_extract_and_compute_gram_k)(sequences, k, m, weights[k-1]) 
-        for k in range(start_k, k_max + 1)
+        delayed(_extract_and_compute_gram_k_symmetric)(
+            sequences, k, m, weights[k-1], 
+            n_inner_jobs=_jobs_for_k(k)
+        )
+        for k in active_ks
     )
 
-    # OPTIMIZATION 2: Sum the (N x N) dense matrices. 
-    # This keeps memory strictly bound to O(N^2) regardless of how massive the feature space gets.
-    composite_matrix = sum(sub_grams)
-    
-    # We return None for the sparse matrix to save RAM, as it is not used in the evaluation pipeline
-    return composite_matrix, None
+    return sum(sub_grams), None
 
 def normalize_gram(K: np.ndarray) -> np.ndarray:
     """
