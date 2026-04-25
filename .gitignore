@@ -4,6 +4,9 @@
 # Datasets
 data/
 
+# Local Caches and Generated Indexes
+.fai_cache/
+
 # Python cache files
 __pycache__/
 *.py[cod]

@@ -12,7 +12,6 @@ import os
 import mmap
 from array import array
 import pysam
-import re
 
 from numba import njit
 
@@ -39,29 +38,43 @@ def _extract_sequence_fast(mmap_array: np.ndarray, offset: int, seq_len: int):
 
 class MMapFastaReader:
     """
-    Reader FASTA ultra-veloce basato su mmap + .fai index + Numba JIT.
-    L'indice è memorizzato in due array di tipo C per minimizzare il footprint.
+    Fast FASTA Reader based on mmap + .fai index + Numba JIT.
+    Updated to support reading from read-only data directories via symlink caching.
     """
 
-    def __init__(self, fasta_path: str):
-        fai_path = fasta_path + '.fai'
-        if not os.path.exists(fai_path):
-            print(f"Indice .fai non trovato, lo creo: {fai_path}")
-            pysam.faidx(fasta_path)
-
-        # C Array (unsigned long long, 8 byte), length (unsigned int, 4 byte)
+    def __init__(self, fasta_path: str, index_cache_dir: str = None):
         self.offsets = array('Q')
         self.lengths = array('I')
 
-        # write the .fai data into the C arrays for fast access
+        # 1. Handle read-only directories by symlinking to a local cache
+        if index_cache_dir:
+            os.makedirs(index_cache_dir, exist_ok=True)
+            filename = os.path.basename(fasta_path)
+            symlink_path = os.path.join(index_cache_dir, filename)
+            
+            # Create a symlink to the original file if it doesn't exist
+            if not os.path.exists(symlink_path):
+                os.symlink(fasta_path, symlink_path)
+            
+            target_fasta_for_index = symlink_path
+        else:
+            target_fasta_for_index = fasta_path
+
+        fai_path = target_fasta_for_index + '.fai'
+        
+        # 2. Generate the index if it doesn't exist (writes to the cache dir)
+        if not os.path.exists(fai_path):
+            print(f"Cannot find .fai index, creating it: {fai_path}")
+            pysam.faidx(target_fasta_for_index)
+
+        # 3. Read the .fai data into the C arrays
         with open(fai_path, 'r') as f:
             for line in f:
                 parts = line.rstrip('\n').split('\t')
-                # parts[2]: offset, parts[1]: lunghezza
                 self.offsets.append(int(parts[2]))
                 self.lengths.append(int(parts[1]))
 
-        # Open the FASTA file and create a memory map for zero-copy access
+        # 4. Open the FASTA file and create a memory map for zero-copy access
         self._file = open(fasta_path, 'rb')
         self._mmap = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
         
@@ -94,7 +107,7 @@ class MMapFastaReader:
         return buf_array.tobytes().decode('ascii')
 
     def close(self):
-        """Chiude la mappa e il file handle."""
+        """Close the memory map and file handle."""
         # 1. Delete the NumPy array reference to release the exported memory pointer
         if hasattr(self, '_mmap_array'):
             del self._mmap_array
@@ -111,7 +124,8 @@ def load_patient_cohort(
     max_train: int = 5000,
     max_test_normal: int = 2500,
     max_test_tumor: int = 2500,
-    random_seed: int = 42
+    random_seed: int = 42,
+    index_cache_dir: str = None
 ) -> Tuple[List[str], List[str], np.ndarray]:
     """
     Loads patient FASTA files and creates the split.
@@ -128,7 +142,7 @@ def load_patient_cohort(
         
         for file_path in file_list:
             print(f"  -> Loading {desc}: {os.path.basename(file_path)} (Target: {seqs_per_file} seqs)")
-            reader = MMapFastaReader(file_path)
+            reader = MMapFastaReader(file_path, index_cache_dir=index_cache_dir)
             total_available = len(reader.offsets)
             
             # Determine how many sequences we can safely sample
@@ -141,8 +155,8 @@ def load_patient_cohort(
             raw_seqs = [reader.get_seq(i) for i in sampled_indices]
             reader.close()
             
-            # Clean sequences and drop any Nones
-            clean_seqs = [clean_sequence(s) for s in raw_seqs if s is not None]
+            # Convert to uppercase and drop any Nones
+            clean_seqs = [s.upper() for s in raw_seqs if s is not None]
             all_seqs.extend(clean_seqs)
             
         return all_seqs
