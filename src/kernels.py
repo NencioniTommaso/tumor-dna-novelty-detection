@@ -8,6 +8,8 @@ biological representation without feature space explosion.
 """
 
 import itertools
+import logging
+import os
 from functools import lru_cache
 
 import numpy as np
@@ -16,19 +18,16 @@ from sklearn.feature_extraction.text import CountVectorizer
 from joblib import Parallel, delayed
 from typing import List, Tuple, Optional
 
+# Configure the module-level logger
+logger = logging.getLogger(__name__)
+
 # Standard IUPAC ambiguity mapping
 IUPAC_MAP = {
     'A': ['A'], 'C': ['C'], 'G': ['G'], 'T': ['T'],
-    'M': ['A', 'C'],
-    'R': ['A', 'G'],
-    'W': ['A', 'T'],
-    'S': ['C', 'G'],
-    'Y': ['C', 'T'],
-    'K': ['G', 'T'],
-    'V': ['A', 'C', 'G'],
-    'H': ['A', 'C', 'T'],
-    'D': ['A', 'G', 'T'],
-    'B': ['C', 'G', 'T'],
+    'M': ['A', 'C'], 'R': ['A', 'G'], 'W': ['A', 'T'],
+    'S': ['C', 'G'], 'Y': ['C', 'T'], 'K': ['G', 'T'],
+    'V': ['A', 'C', 'G'], 'H': ['A', 'C', 'T'], 
+    'D': ['A', 'G', 'T'], 'B': ['C', 'G', 'T'],
     'N': ['A', 'C', 'G', 'T']
 }
 
@@ -126,6 +125,7 @@ def _extract_and_compute_gram_k_symmetric(
         return np.zeros((len(sequences), len(sequences)), dtype=np.float64)
 
     # 1. Extract and scale features
+    logger.debug(f"Extracting features for k={k}, m={m} (weight={weight})...")
     X_k = extract_features(sequences, k, m)
     X_k = X_k.multiply(np.sqrt(weight))
     
@@ -134,6 +134,7 @@ def _extract_and_compute_gram_k_symmetric(
     
     # Fast path for small datasets
     if N <= block_size:
+        logger.debug(f"Computing exact Gram matrix directly for N={N} (k={k})")
         K_full = X_k.dot(X_k.T).toarray()
         return K_full
     
@@ -148,6 +149,7 @@ def _extract_and_compute_gram_k_symmetric(
                 tasks.append((r_start, r_end, c_start, c_end))
                 
     # 4. Execute block-pair multiplications in parallel
+    logger.debug(f"Executing {len(tasks)} block-pair multiplications for k={k} using {n_inner_jobs} threads...")
     results = Parallel(n_jobs=n_inner_jobs, prefer="threads")(
         delayed(_compute_gram_block_pair)(X_k, rs, re, cs, ce)
         for rs, re, cs, ce in tasks
@@ -176,13 +178,15 @@ def mixed_string_kernel(
     start_k = max(1, m + 1) if m > 0 else 1
     active_ks = [k for k in range(start_k, k_max + 1) if weights[k-1] != 0.0]
     
-    import os
     total_cores = os.cpu_count() if n_jobs == -1 else n_jobs
     
     # Heuristic: assign more inner cores to larger k-values (they cost more)
     large_ks = [k for k in active_ks if k > 3]
     n_outer = max(1, len(large_ks))     # how many large-k jobs run "concurrently"
     inner_cores = max(1, total_cores // n_outer)
+
+    logger.info(f"Computing Mixed String Kernel for {len(sequences)} sequences...")
+    logger.info(f"Active K-mers: {active_ks} | Cores allocated: {total_cores} (Outer jobs: {n_jobs}, Inner threads ~{inner_cores})")
 
     def _jobs_for_k(k):
         return inner_cores if k > 3 else 1
@@ -195,6 +199,7 @@ def mixed_string_kernel(
         for k in active_ks
     )
 
+    logger.info("Fusing sub-grams into final kernel...")
     return sum(sub_grams), None
 
 def normalize_gram(K: np.ndarray) -> np.ndarray:
@@ -202,6 +207,7 @@ def normalize_gram(K: np.ndarray) -> np.ndarray:
     Normalizes a dense Gram Matrix using efficient NumPy broadcasting.
     K_norm(i, j) = K(i, j) / sqrt(K(i, i) * K(j, j))
     """
+    logger.debug("Normalizing dense Gram matrix...")
     diag = np.diag(K)
     diag_safe = np.maximum(diag, 1e-12)
     inv_sqrt_diag = 1.0 / np.sqrt(diag_safe)

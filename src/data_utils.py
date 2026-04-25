@@ -5,15 +5,18 @@ Optimized with vectorized NumPy operations for fast, large-scale dataset generat
 and Numba JIT compilation to eliminate I/O parsing bottlenecks.
 """
 
-import numpy as np
-from typing import Tuple, List
-
 import os
 import mmap
+import logging
 from array import array
-import pysam
+from typing import Tuple, List
 
+import numpy as np
+import pysam
 from numba import njit
+
+# Configure the module-level logger
+logger = logging.getLogger(__name__)
 
 # --- NUMBA OPTIMIZATION ---
 # @njit forces this function to compile to raw machine code. 
@@ -64,7 +67,7 @@ class MMapFastaReader:
         
         # 2. Generate the index if it doesn't exist (writes to the cache dir)
         if not os.path.exists(fai_path):
-            print(f"Cannot find .fai index, creating it: {fai_path}")
+            logger.info(f"Cannot find .fai index, creating it: {fai_path}")
             pysam.faidx(target_fasta_for_index)
 
         # 3. Read the .fai data into the C arrays
@@ -83,8 +86,7 @@ class MMapFastaReader:
 
     def get_seq(self, seq_idx: int) -> str | None:
         if seq_idx < 0 or seq_idx >= len(self.offsets):
-            import logging
-            logging.warning(f"Index {seq_idx} out of range (max: {len(self.offsets) - 1})")
+            logger.warning(f"Index {seq_idx} out of range (max: {len(self.offsets) - 1})")
             return None
 
         offset = self.offsets[seq_idx]
@@ -95,8 +97,7 @@ class MMapFastaReader:
 
         # Check if we read the expected number of characters (sanity check for corrupted .fai)
         if read < seq_len:
-            import logging
-            logging.error(
+            logger.error(
                 f"Corrupted sequence at index {seq_idx}: "
                 f"expected {seq_len} chars, got only {read}. "
                 f"Regenerate .fai with: samtools faidx <file>"
@@ -141,7 +142,7 @@ def load_patient_cohort(
         all_seqs = []
         
         for file_path in file_list:
-            print(f"  -> Loading {desc}: {os.path.basename(file_path)} (Target: {seqs_per_file} seqs)")
+            logger.info(f"Loading {desc}: {os.path.basename(file_path)} (Target: {seqs_per_file} seqs)")
             reader = MMapFastaReader(file_path, index_cache_dir=index_cache_dir)
             total_available = len(reader.offsets)
             
@@ -161,10 +162,10 @@ def load_patient_cohort(
             
         return all_seqs
 
-    print("\n--- Loading Training Data (Healthy Baseline) ---")
+    logger.info("--- Loading Training Data (Healthy Baseline) ---")
     train_data = _read_sampled_files(train_normal_files, "Train (Normal)", max_train)
     
-    print("\n--- Loading Testing Data (Inliers & Outliers) ---")
+    logger.info("--- Loading Testing Data (Inliers & Outliers) ---")
     test_healthy_data = _read_sampled_files(test_normal_files, "Test (Normal)", max_test_normal)
     test_cancer_data = _read_sampled_files(test_tumor_files, "Test (Tumor)", max_test_tumor)
     
@@ -173,10 +174,10 @@ def load_patient_cohort(
     # Ground truth labels: 1 for normal, -1 for tumor
     y_test_true = np.array([1] * len(test_healthy_data) + [-1] * len(test_cancer_data))
     
-    print(f"\n[Data Load Complete]")
-    print(f"Train (Normal): {len(train_data)} sequences")
-    print(f"Test  (Normal): {len(test_healthy_data)} sequences")
-    print(f"Test  (Tumor) : {len(test_cancer_data)} sequences")
-    print(f"Total Combined: {len(train_data) + len(test_data)} sequences")
+    logger.info("[Data Load Complete]")
+    logger.info(f"Train (Normal): {len(train_data)} sequences")
+    logger.info(f"Test  (Normal): {len(test_healthy_data)} sequences")
+    logger.info(f"Test  (Tumor) : {len(test_cancer_data)} sequences")
+    logger.info(f"Total Combined: {len(train_data) + len(test_data)} sequences")
     
     return train_data, test_data, y_test_true

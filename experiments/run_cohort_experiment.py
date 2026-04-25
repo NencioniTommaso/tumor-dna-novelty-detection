@@ -1,149 +1,99 @@
 """
 run_cohort_experiment.py
 Executes a rigorous Patient-Level Machine Learning pipeline for Colon Cancer Novelty Detection.
-Includes random sampling to bound memory execution to 10,000 total sequences.
 """
 
 import time
 import sys
 import os
-import numpy as np
 
 # Dynamically resolve paths to ensure the script runs from anywhere
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 
-# Import from our custom library
+# Import from our custom library and new utils
 from src.data_utils import load_patient_cohort
 from src.kernels import mixed_string_kernel, normalize_gram
 from src.evaluation import evaluate_novelty_detector
+from experiments.experiments_utils import setup_logger, parse_arguments, generate_mkl_weights
 
-def generate_mkl_weights(max_k: int, noise_threshold: int = 2, scaling: str = 'linear') -> list[float]:
-    """
-    Dynamically generates an array of ascending Multiple Kernel Learning (MKL) weights.
-    Silences small k-mers (noise) and rewards larger structural motifs.
-    """
-    weights = []
-    for k in range(1, max_k + 1):
-        if k <= noise_threshold:
-            weights.append(0.0)
-        else:
-            if scaling == 'linear':
-                weights.append(float(k - noise_threshold))
-            elif scaling == 'quadratic':
-                weights.append(float((k - noise_threshold) ** 2))
-                
-    total = sum(weights)
-    return [round(w / total, 4) for w in weights]
-
+logger = setup_logger(__name__)
 
 def main():
-    print("=====================================================")
-    print(" COLON CANCER SOMATIC DETECTION: PATIENT COHORT TEST")
-    print("=====================================================")
+    args = parse_arguments(project_root)
     
-    #data_dir = os.path.join(project_root, 'data')
-    #data_dir = "/home/tommy/code/innocenti/evaluation_dna_strings/data"
-
-    data_dir = "/home/paolo/conticello"
-
-    # Set up a local cache directory inside your writable project folder
-    cache_dir = os.path.join(project_root, ".fai_cache")
+    logger.info("=====================================================")
+    logger.info(" COLON CANCER SOMATIC DETECTION: PATIENT COHORT TEST")
+    logger.info("=====================================================")
     
     # --- 1. Define the Patient-Level Split ---
     train_normal_files = [
-        os.path.join(data_dir, "Healthy_2_merged_subset_1200000.fa"),
-        os.path.join(data_dir, "Healthy_3_merged_subset_1200000.fa"),
-        os.path.join(data_dir, "Healthy_4_merged_subset_1200000.fa"),
-        os.path.join(data_dir, "Healthy_5_merged_subset_1200000.fa")
+        os.path.join(args.data_dir, f"Healthy_{i}_merged_subset_1200000.fa") for i in range(2, 6)
     ]
-    
     test_normal_files = [
-        os.path.join(data_dir, "Healthy_6_merged_subset_1200000.fa"),
-        os.path.join(data_dir, "Healthy_7_merged_subset_1200000.fa")
+        os.path.join(args.data_dir, f"Healthy_{i}_merged_subset_1200000.fa") for i in range(6, 8)
     ]
-    
     test_tumor_files = [
-        os.path.join(data_dir, "Colo_11_merged_subset_1200000.fa"),
-        os.path.join(data_dir, "Colo_12_merged_subset_1200000.fa"),
-        os.path.join(data_dir, "Colo_13_merged_subset_1200000.fa")
+        os.path.join(args.data_dir, f"Colo_{i}_merged_subset_1200000.fa") for i in range(11, 14)
     ]
     
     # Verify files exist before running
     all_files = train_normal_files + test_normal_files + test_tumor_files
-    for f in all_files:
-        if not os.path.exists(f):
-            print(f"CRITICAL ERROR: Cannot find file {f}")
-            sys.exit(1)
+    missing_files = [f for f in all_files if not os.path.exists(f)]
+    if missing_files:
+        for f in missing_files:
+            logger.error(f"Cannot find file: {f}")
+        sys.exit(1)
 
     # --- 2. Load and Sample Data  ---
-    # Train Normal + Test Normal + Test Tumor
+    logger.info("Starting data loading and sampling...")
     train_data, test_data, y_test_true = load_patient_cohort(
         train_normal_files, 
         test_normal_files, 
         test_tumor_files,
-        max_train=18000,
-        max_test_normal=1500,
-        max_test_tumor=1500,
-        random_seed=42,  # Ensures reproducibility across experiment runs
-        index_cache_dir=cache_dir
+        max_train=args.max_train,
+        max_test_normal=args.max_test_normal,
+        max_test_tumor=args.max_test_tumor,
+        random_seed=args.seed,
+        index_cache_dir=args.cache_dir
     )
     
-    all_data = train_data + test_data
-    num_train = len(train_data)
+    # --- 3. Kernel Computation ---
+    mkl_weights = generate_mkl_weights(args.max_k, noise_threshold=2)
+    logger.info(f"Computing Explicit Sparse Mismatch Kernel (Max K: {args.max_k}, Mismatches: {args.mismatches})...")
     
-    # --- 3. Biological Hyperparameters ---
-    MAX_K = 6
-    MISMATCHES = 1
-    NU_PARAM = 0.2  # The expected anomaly rate
-    
-    mkl_weights = generate_mkl_weights(MAX_K, noise_threshold=2, scaling='linear')
-    
-    print(f"\n--- Kernel Configuration ---")
-    print(f"K-max      : {MAX_K}")
-    print(f"Mismatches : {MISMATCHES}")
-    print(f"MKL Weights: {mkl_weights}")
-    
-    # --- 4. Kernel Computation ---
-    print(f"\n[Computing Explicit Sparse Mismatch Kernel...]")
     start_time = time.time()
-    
     K_full, _ = mixed_string_kernel(
-        sequences=all_data, 
-        k_max=MAX_K, 
-        m=MISMATCHES, 
+        sequences=train_data + test_data, 
+        k_max=args.max_k, 
+        m=args.mismatches, 
         weights=mkl_weights,
-        n_jobs=-1  
+        n_jobs=args.n_jobs  
     )
     
-    print("[Normalizing Gram Matrix...]")
+    logger.info("Normalizing Gram Matrix...")
     K_full = normalize_gram(K_full)
     
-    # --- 5. Matrix Slicing ---
-    K_train = K_full[:num_train, :num_train]
-    K_test  = K_full[num_train:, :num_train]
-    
-    # --- 6. Anomaly Detection (One-Class SVM) ---
-    print("\n[Fitting One-Class SVM...]")
+    # --- 4. Matrix Slicing & Anomaly Detection ---
+    num_train = len(train_data)
+    logger.info(f"Fitting One-Class SVM (nu={args.nu_param})...")
     metrics = evaluate_novelty_detector(
-        K_train=K_train, 
-        K_test=K_test, 
+        K_train=K_full[:num_train, :num_train], 
+        K_test=K_full[num_train:, :num_train], 
         y_test_true=y_test_true, 
-        nu=NU_PARAM
+        nu=args.nu_param
     )
     
     elapsed = time.time() - start_time
     
-    # --- 7. Output Results ---
-    print("\n=====================================================")
-    print(" FINAL RESULTS: PATIENT COHORT VALIDATION")
-    print("=====================================================")
-    print(f"Execution Time       : {elapsed:.2f} seconds")
-    print(f"ROC-AUC Score        : {metrics['auc']:.4f}")
-    print("\nDetailed Classification Report:")
-    print(metrics['report_str'])
-    print("=====================================================")
+    # --- 5. Output Results ---
+    logger.info("=====================================================")
+    logger.info(" FINAL RESULTS")
+    logger.info("=====================================================")
+    logger.info(f"Execution Time : {elapsed:.2f} seconds")
+    logger.info(f"ROC-AUC Score  : {metrics['auc']:.4f}")
+    logger.info(f"\nClassification Report:\n{metrics['report_str']}")
 
 if __name__ == "__main__":
     main()
