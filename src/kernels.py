@@ -93,16 +93,21 @@ def mismatch_analyzer(sequence: str, k: int, m: int = 1) -> List[str]:
             
     return expanded_kmers
 
-def extract_features(sequences: List[str], k: int, m: int = 0) -> sp.csr_matrix:
+def extract_features(sequences: List[str], k: int, m: int = 0, vocabulary: Optional[dict] = None) -> sp.csr_matrix:
     """
     Extracts sequence features. 
-    Even if m=0 (Spectrum Kernel), we route through the custom analyzer 
-    to ensure IUPAC ambiguity codes are combinatorially resolved.
+    Accepts an optional fixed vocabulary to allow for stateless, chunked parallelization.
     """
     vectorizer = CountVectorizer(
         analyzer=lambda x: mismatch_analyzer(x, k=k, m=m), 
-        lowercase=False
+        lowercase=False,
+        vocabulary=vocabulary  # Inject fixed vocabulary
     )
+    
+    # If vocab is fixed, we only need to transform (skips fitting overhead)
+    if vocabulary is not None:
+        return vectorizer.transform(sequences)
+        
     return vectorizer.fit_transform(sequences)
 
 def _compute_gram_block_pair(X_csr: sp.csr_matrix, r_start: int, r_end: int, c_start: int, c_end: int):
