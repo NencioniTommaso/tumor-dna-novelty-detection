@@ -28,8 +28,8 @@ def parse_arguments(project_root: str) -> argparse.Namespace:
     # File and Directory Paths
     parser.add_argument("--data-dir", type=str, required=True,
                         help="Path to the directory containing the FASTA files.")
-    parser.add_argument("--cache-dir", type=str, default=os.path.join(project_root, ".fai_cache"),
-                        help="Path for the fasta index cache (default: .fai_cache inside project root).")
+    parser.add_argument("--cache-dir", type=str, default=os.path.join(project_root, "data", ".fai_cache"),
+                        help="Path for the fasta index cache (default: data/.fai_cache).")
 
     # Biological/Model Hyperparameters
     parser.add_argument("--max-k", type=int, default=6,

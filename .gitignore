@@ -5,7 +5,10 @@
 data/
 
 # Local Caches and Generated Indexes
-.fai_cache/
+data/.fai_cache/
+
+#Experiment Outputs
+experiments/heatmaps/
 
 # Python cache files
 __pycache__/
