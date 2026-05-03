@@ -23,7 +23,35 @@ class DNAFoundationExtractor:
         logger.info(f"[Initialization] Loading Foundation Model: {model_name} on {self.device}")
         
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-        self.model = AutoModel.from_pretrained(model_name, trust_remote_code=True).to(self.device)
+        
+        from transformers import AutoConfig
+        config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+        if getattr(config, "pad_token_id", None) is None:
+            config.pad_token_id = self.tokenizer.pad_token_id
+
+        # --- THE ULTIMATE HOTFIX ---
+        # DNABERT-2 uses torch.arange, which stubbornly builds on the CPU and ignores 
+        # the meta device. We temporarily patch it to respect the current memory context.
+        original_arange = torch.arange
+        def patched_arange(*args, **kwargs):
+            if 'device' not in kwargs:
+                # Force the device to match whatever PyTorch is currently defaulting to
+                kwargs['device'] = torch.empty(0).device
+            return original_arange(*args, **kwargs)
+        
+        torch.arange = patched_arange
+        
+        try:
+            # Load the model cleanly. The patched arange will prevent the crash!
+            self.model = AutoModel.from_pretrained(
+                model_name, 
+                config=config, 
+                trust_remote_code=True
+            ).to(self.device)
+        finally:
+            # Instantly restore the original PyTorch function so we don't break anything else
+            torch.arange = original_arange  
+            
         self.model.eval()
 
     def _mean_pooling(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:

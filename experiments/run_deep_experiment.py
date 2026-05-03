@@ -17,8 +17,8 @@ sys.path.append(project_root)
 
 # Import from our custom library and experiment utils
 from src.data_utils import load_patient_cohort
-from src.DNAFeatureExtractor import deep_string_kernel
-from src.kernels import normalize_gram
+from src.DNAFeatureExtractor import compute_train_test_kernels
+# We can remove normalize_gram entirely, as the RBF kernel doesn't need it
 from experiments.experiments_utils import setup_logger, parse_arguments
 
 logger = setup_logger(__name__)
@@ -71,9 +71,9 @@ def main():
     K_train, K_test = compute_train_test_kernels(
         train_sequences=train_data,
         test_sequences=test_data,
-        model_name="zhihan1996/DNABERT-2-117M",
+        model_name="quietflamingo/dnabert2-no-flashattention",  # <--- The CPU-friendly clone
         kernel_type="rbf",
-        batch_size=args.batch_size
+        batch_size=8            #arcgs.batch_size is set to 8 by default to ensure it runs on CPU without OOM
     )
     
     # Normalization isn't needed for RBF
