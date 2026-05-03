@@ -13,6 +13,7 @@ import itertools
 import numpy as np
 import scipy.sparse as sp
 from sklearn.preprocessing import normalize
+from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.linear_model import SGDOneClassSVM
 from sklearn.metrics import classification_report, roc_auc_score
 from joblib import Parallel, delayed
@@ -41,7 +42,7 @@ def evaluate_primal_detector(X_train: sp.csr_matrix, X_test: sp.csr_matrix, y_te
     logger.info("Using Stochastic Gradient Descent for O(N) linear time complexity.")
     
     # We use a high max_iter and strict tolerance to force SGD to find the optimal boundary
-    svm = SGDOneClassSVM(nu=nu, random_state=seed, max_iter=10000, tol=1e-5)
+    svm = SGDOneClassSVM(nu=nu, random_state=seed, max_iter=1000, tol=1e-3)
     
     svm.fit(X_train)
     
@@ -112,8 +113,12 @@ def main():
     logger.info("Horizontally stacking final feature blocks...")
     X_full = sp.hstack(X_k_matrices, format='csr')
     
-    logger.info("Applying L2 Normalization to primal features (Spherical Projection)...")
-    X_full = normalize(X_full, norm='l2', axis=1)
+    #logger.info("Applying L2 Normalization to primal features (Spherical Projection)...")
+    #X_full = normalize(X_full, norm='l2', axis=1)
+
+    logger.info("Applying TF-IDF Transformation (Downweights common DNA, highlights rare mutations)...")
+    tfidf = TfidfTransformer(norm='l2', sublinear_tf=True)
+    X_full = tfidf.fit_transform(X_full)
     
     X_train, X_test = X_full[:num_train, :], X_full[num_train:, :]
     
