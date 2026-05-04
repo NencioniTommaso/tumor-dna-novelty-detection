@@ -35,7 +35,7 @@ def main():
         os.path.join(args.data_dir, f"Healthy_{i}_merged_subset_1200000.fa") for i in range(6, 8)
     ]
     test_tumor_files = [
-        os.path.join(args.data_dir, f"Colo_{i}_merged_subset_1200000.fa") for i in range(11, 14)
+        os.path.join(args.data_dir, f"Colo_{i}_merged_subset_1200000.fa") for i in range(1, 11) if i != 9 # can be pushed to 38
     ]
     
     # Verify files exist before running
@@ -60,7 +60,7 @@ def main():
     )
     
     # --- 3. Kernel Computation ---
-    mkl_weights = generate_mkl_weights(args.max_k, noise_threshold=2)
+    mkl_weights = generate_mkl_weights(args.max_k, args.mismatches)
     logger.info(f"Computing Explicit Sparse Mismatch Kernel (Max K: {args.max_k}, Mismatches: {args.mismatches})...")
     
     start_time = time.time()

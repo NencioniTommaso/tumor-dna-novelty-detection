@@ -55,20 +55,31 @@ def parse_arguments(project_root: str) -> argparse.Namespace:
 
     return parser.parse_args()
 
-def generate_mkl_weights(max_k: int, noise_threshold: int = 2, scaling: str = 'linear') -> list[float]:
+def generate_mkl_weights(max_k: int, m: int = 0, scaling: str = 'linear') -> list[float]:
     """
-    Dynamically generates an array of ascending Multiple Kernel Learning (MKL) weights.
-    Silences small k-mers (noise) and rewards larger structural motifs.
+    Dynamically generates an array of Multiple Kernel Learning (MKL) weights.
+    The noise threshold automatically scales with `m` to prevent short k-mers 
+    from dominating the gram matrix with false-positive mismatch alignments.
     """
+    # Dynamic threshold: e.g., if m=0 -> 1, if m=1 -> 2, if m=2 -> 4
+    noise_threshold = max(1, 2 * m) 
+    
     weights = []
     for k in range(1, max_k + 1):
         if k <= noise_threshold:
             weights.append(0.0)
         else:
+            # Shift the base so the first valid k-mer starts at a weight > 0
+            base_val = k - noise_threshold
             if scaling == 'linear':
-                weights.append(float(k - noise_threshold))
+                weights.append(float(base_val))
             elif scaling == 'quadratic':
-                weights.append(float((k - noise_threshold) ** 2))
+                weights.append(float(base_val ** 2))
                 
     total = sum(weights)
+    
+    # Safety check in case the threshold silences all k-mers
+    if total == 0:
+        return [0.0] * max_k
+        
     return [round(w / total, 4) for w in weights]
