@@ -54,4 +54,30 @@ def evaluate_novelty_detector(
         "predictions": predictions,
         "anomaly_scores": anomaly_scores
     }
+
+
+def evaluate_patient_level_novelty(anomaly_scores, test_files_info, logger):
+    patient_y_true = []
+    patient_scores = []
+    current_idx = 0
+
+    logger.info("\n--- Patient-Level Anomaly Aggregation ---")
+
+    for info in test_files_info:
+        num_seqs = info['num_sequences']
+        seq_scores = anomaly_scores[current_idx: current_idx + num_seqs]
+        current_idx += num_seqs
+
+        inverted_scores = -np.asarray(seq_scores)
+        top_k = max(1, int(num_seqs * 0.05))
+        patient_score = np.mean(np.sort(inverted_scores)[-top_k:])
+
+        patient_y_true.append(info['label'])
+        patient_scores.append(patient_score)
+
+        status = "TUMOR" if info['label'] == -1 else "HEALTHY"
+        logger.info(f"[{status}] {info['filename']} -> Anomaly Score: {patient_score:.4f}")
+
+    patient_auc = roc_auc_score(np.array(patient_y_true) == -1, patient_scores)
+    return patient_auc
     

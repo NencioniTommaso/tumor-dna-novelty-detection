@@ -16,102 +16,12 @@ project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 
 # Import from our custom library
-from src.data_utils import MMapFastaReader
-from src.kernels import mixed_string_kernel, normalize_gram
-from src.evaluation import evaluate_novelty_detector
-from experiments.experiments_utils import setup_logger, parse_arguments, generate_mkl_weights
+from src.data_utils import load_tracked_patient_cohort
+from src.kernels import generate_mkl_weights, mixed_string_kernel, normalize_gram
+from src.evaluation import evaluate_novelty_detector, evaluate_patient_level_novelty
+from experiments.experiments_utils import setup_logger, parse_arguments
 
 logger = setup_logger(__name__)
-
-def load_tracked_patient_cohort(train_normal_files, test_normal_files, test_tumor_files, args, logger):
-    """
-    Loads FASTA files while tracking the number of sequences extracted per file.
-    This is required for Multiple Instance Learning (MIL) aggregation later.
-    """
-    np.random.seed(args.seed)
-    
-    def _read_and_track(file_list, desc, max_total_seqs, label):
-        if not file_list:
-            return [], []
-            
-        seqs_per_file = max_total_seqs // len(file_list)
-        all_seqs = []
-        files_info = []
-        
-        for file_path in file_list:
-            logger.info(f"  -> Loading {desc}: {os.path.basename(file_path)}")
-            # Utilizing the optimized MMapFastaReader from data_utils
-            reader = MMapFastaReader(file_path, index_cache_dir=args.cache_dir)
-            total_available = len(reader.offsets)
-            
-            num_to_sample = min(seqs_per_file, total_available)
-            sampled_indices = np.random.choice(total_available, num_to_sample, replace=False)
-            
-            raw_seqs = [reader.get_seq(i) for i in sampled_indices]
-            reader.close()
-            
-            clean_seqs = [s.upper() for s in raw_seqs if s is not None]
-            all_seqs.extend(clean_seqs)
-            
-            if label is not None:
-                files_info.append({
-                    'filename': os.path.basename(file_path),
-                    'label': label,
-                    'num_sequences': len(clean_seqs)
-                })
-                
-        return all_seqs, files_info
-
-    logger.info("--- Loading Training Data (Healthy Baseline) ---")
-    train_data, _ = _read_and_track(train_normal_files, "Train (Normal)", args.max_train, None)
-    
-    logger.info("\n--- Loading Testing Data (Tracked Instances) ---")
-    test_normal_data, normal_info = _read_and_track(test_normal_files, "Test (Normal)", args.max_test_normal, 1)
-    test_tumor_data, tumor_info = _read_and_track(test_tumor_files, "Test (Tumor)", args.max_test_tumor, -1)
-    
-    test_data = test_normal_data + test_tumor_data
-    test_files_info = normal_info + tumor_info
-    
-    # Ground truth labels for the sequence-level evaluation function
-    y_test_true_seq = np.array([1] * len(test_normal_data) + [-1] * len(test_tumor_data))
-    
-    return train_data, test_data, y_test_true_seq, test_files_info
-
-
-def evaluate_patient_level_novelty(anomaly_scores, test_files_info, logger):
-    """
-    Aggregates sequence-level anomaly scores into a single Patient-Level score
-    by looking at the most anomalous sequences (top 5%).
-    """
-    patient_y_true = []
-    patient_scores = []
-    current_idx = 0
-    
-    logger.info("\n--- Patient-Level Anomaly Aggregation ---")
-    
-    for info in test_files_info:
-        num_seqs = info['num_sequences']
-        
-        # Extract sequences belonging ONLY to this patient
-        seq_scores = anomaly_scores[current_idx : current_idx + num_seqs]
-        current_idx += num_seqs
-        
-        # Invert so higher scores = more anomalous
-        inverted_scores = -seq_scores
-        
-        # Calculate the tumor burden proxy (Mean of the top 5% most anomalous reads)
-        top_k = max(1, int(num_seqs * 0.05)) 
-        patient_score = np.mean(np.sort(inverted_scores)[-top_k:])
-        
-        patient_y_true.append(info['label'])
-        patient_scores.append(patient_score)
-        
-        status = "TUMOR" if info['label'] == -1 else "HEALTHY"
-        logger.info(f"[{status}] {info['filename']} -> Anomaly Score: {patient_score:.4f}")
-
-    # Calculate Patient-Level ROC-AUC
-    patient_auc = roc_auc_score(np.array(patient_y_true) == -1, patient_scores)
-    return patient_auc
 
 
 def main():
@@ -151,7 +61,7 @@ def main():
     )
     
     # --- 3. Kernel Computation ---
-    mkl_weights = generate_mkl_weights(args.max_k, args.mismatches)
+    mkl_weights = generate_mkl_weights(args.max_k, noise_threshold=max(1, 2 * args.mismatches))
     logger.info(f"\nComputing Explicit Sparse Mismatch Kernel (Max K: {args.max_k}, Mismatches: {args.mismatches})...")
     
     start_time = time.time()
@@ -179,11 +89,7 @@ def main():
     )
     
     # --- 5. True Patient-Level Anomaly Aggregation ---
-    patient_auc = evaluate_patient_level_novelty(
-        anomaly_scores=metrics['anomaly_scores'], 
-        test_files_info=test_files_info, 
-        logger=logger
-    )
+    patient_auc = evaluate_patient_level_novelty(metrics['anomaly_scores'], test_files_info, logger)
     
     elapsed = time.time() - start_time
     

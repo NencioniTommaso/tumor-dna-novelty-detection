@@ -14,9 +14,9 @@ sys.path.append(project_root)
 
 # Import from our custom library and new utils
 from src.data_utils import load_patient_cohort
-from src.kernels import mixed_string_kernel, normalize_gram
+from src.kernels import generate_mkl_weights, mixed_string_kernel, normalize_gram
 from src.evaluation import evaluate_novelty_detector
-from experiments.experiments_utils import setup_logger, parse_arguments, generate_mkl_weights
+from experiments.experiments_utils import setup_logger, parse_arguments
 
 logger = setup_logger(__name__)
 
@@ -60,7 +60,7 @@ def main():
     )
     
     # --- 3. Kernel Computation ---
-    mkl_weights = generate_mkl_weights(args.max_k, args.mismatches)
+    mkl_weights = generate_mkl_weights(args.max_k, noise_threshold=max(1, 2 * args.mismatches))
     logger.info(f"Computing Explicit Sparse Mismatch Kernel (Max K: {args.max_k}, Mismatches: {args.mismatches})...")
     
     start_time = time.time()

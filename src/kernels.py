@@ -31,6 +31,32 @@ IUPAC_MAP = {
     'N': ['A', 'C', 'G', 'T']
 }
 
+
+def generate_mkl_weights(max_k: int, noise_threshold: int = 2, scaling: str = 'linear') -> list[float]:
+    """
+    Generates normalized Multiple Kernel Learning weights while suppressing short noisy k-mers.
+    """
+    weights = []
+
+    for k in range(1, max_k + 1):
+        if k <= noise_threshold:
+            weights.append(0.0)
+            continue
+
+        base_val = k - noise_threshold
+        if scaling == 'linear':
+            weights.append(float(base_val))
+        elif scaling == 'quadratic':
+            weights.append(float(base_val ** 2))
+        else:
+            raise ValueError(f"Unsupported scaling strategy: {scaling}")
+
+    total = sum(weights)
+    if total == 0:
+        return [0.0] * max_k
+
+    return [round(weight / total, 4) for weight in weights]
+
 @lru_cache(maxsize=100000)
 def resolve_ambiguous_kmer(kmer: str) -> List[str]:
     """

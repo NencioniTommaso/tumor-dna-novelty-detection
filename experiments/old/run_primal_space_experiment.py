@@ -23,8 +23,8 @@ project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 
 from src.data_utils import load_patient_cohort
-from src.kernels import extract_features
-from experiments.experiments_utils import setup_logger, parse_arguments, generate_mkl_weights
+from src.kernels import extract_features, generate_mkl_weights
+from experiments.experiments_utils import setup_logger, parse_arguments
 
 logger = setup_logger(__name__)
 

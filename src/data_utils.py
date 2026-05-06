@@ -118,66 +118,47 @@ class MMapFastaReader:
         self._file.close()
 
 
-def load_patient_cohort(
-    train_normal_files: List[str], 
-    test_normal_files: List[str], 
-    test_tumor_files: List[str],
-    max_train: int = 5000,
-    max_test_normal: int = 2500,
-    max_test_tumor: int = 2500,
-    random_seed: int = 42,
-    index_cache_dir: str = None
-) -> Tuple[List[str], List[str], np.ndarray]:
-    """
-    Loads patient FASTA files and creates the split.
-    Uses index-level random sampling to efficiently create balanced train/test sets without loading entire files into memory.
-    """
-    np.random.seed(random_seed)
-    
-    def _read_sampled_files(file_list: List[str], desc: str, max_total_seqs: int) -> List[str]:
+def load_tracked_patient_cohort(train_normal_files, test_normal_files, test_tumor_files, args, logger):
+    np.random.seed(args.seed)
+
+    def _read_and_track(file_list, desc, max_total_seqs, label):
         if not file_list:
-            return []
-            
+            return [], []
+
         seqs_per_file = max_total_seqs // len(file_list)
         all_seqs = []
-        
+        files_info = []
+
         for file_path in file_list:
-            logger.info(f"Loading {desc}: {os.path.basename(file_path)} (Target: {seqs_per_file} seqs)")
-            reader = MMapFastaReader(file_path, index_cache_dir=index_cache_dir)
+            logger.info(f"  -> Loading {desc}: {os.path.basename(file_path)}")
+            reader = MMapFastaReader(file_path, index_cache_dir=args.cache_dir)
             total_available = len(reader.offsets)
-            
-            # Determine how many sequences we can safely sample
             num_to_sample = min(seqs_per_file, total_available)
-            
-            # Fast index sampling: pick random indices without replacement
             sampled_indices = np.random.choice(total_available, num_to_sample, replace=False)
-            
-            # Extract ONLY the sampled sequences
             raw_seqs = [reader.get_seq(i) for i in sampled_indices]
             reader.close()
-            
-            # Convert to uppercase and drop any Nones
+
             clean_seqs = [s.upper() for s in raw_seqs if s is not None]
             all_seqs.extend(clean_seqs)
-            
-        return all_seqs
+
+            if label is not None:
+                files_info.append({
+                    'filename': os.path.basename(file_path),
+                    'label': label,
+                    'num_sequences': len(clean_seqs)
+                })
+
+        return all_seqs, files_info
 
     logger.info("--- Loading Training Data (Healthy Baseline) ---")
-    train_data = _read_sampled_files(train_normal_files, "Train (Normal)", max_train)
-    
-    logger.info("--- Loading Testing Data (Inliers & Outliers) ---")
-    test_healthy_data = _read_sampled_files(test_normal_files, "Test (Normal)", max_test_normal)
-    test_cancer_data = _read_sampled_files(test_tumor_files, "Test (Tumor)", max_test_tumor)
-    
-    test_data = test_healthy_data + test_cancer_data
-    
-    # Ground truth labels: 1 for normal, -1 for tumor
-    y_test_true = np.array([1] * len(test_healthy_data) + [-1] * len(test_cancer_data))
-    
-    logger.info("[Data Load Complete]")
-    logger.info(f"Train (Normal): {len(train_data)} sequences")
-    logger.info(f"Test  (Normal): {len(test_healthy_data)} sequences")
-    logger.info(f"Test  (Tumor) : {len(test_cancer_data)} sequences")
-    logger.info(f"Total Combined: {len(train_data) + len(test_data)} sequences")
-    
-    return train_data, test_data, y_test_true
+    train_data, _ = _read_and_track(train_normal_files, "Train (Normal)", args.max_train, None)
+
+    logger.info("\n--- Loading Testing Data (Tracked Instances) ---")
+    test_normal_data, normal_info = _read_and_track(test_normal_files, "Test (Normal)", args.max_test_normal, 1)
+    test_tumor_data, tumor_info = _read_and_track(test_tumor_files, "Test (Tumor)", args.max_test_tumor, -1)
+
+    test_data = test_normal_data + test_tumor_data
+    test_files_info = normal_info + tumor_info
+    y_test_true_seq = np.array([1] * len(test_normal_data) + [-1] * len(test_tumor_data))
+
+    return train_data, test_data, y_test_true_seq, test_files_info
