@@ -217,3 +217,52 @@ def normalize_gram(K: np.ndarray) -> np.ndarray:
     diag_safe = np.maximum(diag, 1e-12)
     inv_sqrt_diag = 1.0 / np.sqrt(diag_safe)
     return K * inv_sqrt_diag[:, None] * inv_sqrt_diag[None, :]
+
+
+
+
+def compute_asymmetric_normalized_kernel(test_seqs: List[str], train_seqs: List[str], max_k: int, mismatches: int, mkl_weights: List[float]) -> np.ndarray:
+    """
+    Computes ONLY the Test vs Train block of the Gram matrix and normalizes it.
+    Bypasses the N^2 dense matrix calculation completely for extreme memory efficiency.
+    """
+    num_test = len(test_seqs)
+    num_train = len(train_seqs)
+    all_seqs = test_seqs + train_seqs
+
+    # Accumulators
+    K_cross = np.zeros((num_test, num_train), dtype=np.float64)
+    diag_test = np.zeros(num_test, dtype=np.float64)
+    diag_train = np.zeros(num_train, dtype=np.float64)
+
+    for k in range(1, max_k + 1):
+        weight = mkl_weights[k-1]
+        if weight == 0.0:
+            continue
+
+        # 1. Extract combined features to ensure vocabulary alignment between Test and Train
+        X_combined = extract_features(all_seqs, k=k, m=mismatches)
+        X_combined = X_combined.multiply(np.sqrt(weight))
+
+        # 2. Slice the sparse matrices (Virtually zero memory cost)
+        X_test = X_combined[:num_test, :]
+        X_train = X_combined[num_test:, :]
+
+        # 3. Compute ONLY the asymmetric cross-block (Test vs Train)
+        K_cross += X_test.dot(X_train.T).toarray()
+
+        # 4. Compute diagonals (self-similarity) WITHOUT dense matrix multiplication
+        diag_test += np.array(X_test.multiply(X_test).sum(axis=1)).flatten()
+        diag_train += np.array(X_train.multiply(X_train).sum(axis=1)).flatten()
+
+    # 5. Apply SVDD Normalization Formula
+    diag_test_safe = np.maximum(diag_test, 1e-12)
+    diag_train_safe = np.maximum(diag_train, 1e-12)
+
+    inv_sqrt_test = 1.0 / np.sqrt(diag_test_safe)
+    inv_sqrt_train = 1.0 / np.sqrt(diag_train_safe)
+
+    # Fast broadcasting: K(i,j) / sqrt(K(i,i) * K(j,j))
+    K_cross_norm = K_cross * inv_sqrt_test[:, None] * inv_sqrt_train[None, :]
+
+    return K_cross_norm

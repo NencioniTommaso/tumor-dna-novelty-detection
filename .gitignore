@@ -10,6 +10,10 @@ data/.fai_cache/
 #Experiment Outputs
 experiments/heatmaps/
 
+# Pretrained Models and Checkpoints
+models/
+*.pkl
+
 # Python cache files
 __pycache__/
 *.py[cod]
