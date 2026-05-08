@@ -6,7 +6,6 @@ Helps tune 'k' and 'm' (mismatches) before running full-scale experiments.
 
 import os
 import sys
-import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -18,16 +17,19 @@ sys.path.append(project_root)
 
 from src.data_utils import load_patient_cohort
 from src.kernels import mixed_string_kernel, normalize_gram
-from experiments.experiments_utils import setup_logger
+from experiments.experiments_utils import (
+    setup_logger,
+    create_base_parser,
+    add_data_dir_arg,
+    add_cache_dir_arg,
+)
 
 logger = setup_logger(__name__)
 
 def parse_diag_args():
-    parser = argparse.ArgumentParser(description="Diagnose Gram Matrix Diagonal Dominance")
-    parser.add_argument("--data-dir", type=str, required=True, help="Path to FASTA files.")
-    
-    parser.add_argument("--cache-dir", type=str, default=os.path.join(project_root, "data", ".fai_cache"),
-                        help="Path for the fasta index cache (default: data/.fai_cache).")
+    parser = create_base_parser("Diagnose Gram Matrix Diagonal Dominance")
+    add_data_dir_arg(parser, required=True)
+    add_cache_dir_arg(parser, project_root)
                         
     parser.add_argument("--k", type=int, default=6, help="Specific K-mer size to test.")
     parser.add_argument("--mismatches", type=int, default=0, help="Mismatches to allow.")

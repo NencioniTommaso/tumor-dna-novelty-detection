@@ -19,12 +19,26 @@ sys.path.append(project_root)
 from src.data_utils import load_patient_cohort
 from src.DNAFeatureExtractor import compute_train_test_kernels
 # We can remove normalize_gram entirely, as the RBF kernel doesn't need it
-from experiments.experiments_utils import setup_logger, parse_arguments
+from experiments.experiments_utils import (
+    setup_logger,
+    create_base_parser,
+    add_data_dir_arg,
+    add_cache_dir_arg,
+    add_sampling_args,
+    add_seed_arg,
+    add_nu_arg,
+)
 
 logger = setup_logger(__name__)
 
 def main():
-    args = parse_arguments(project_root)
+    parser = create_base_parser("Run Sequence Novelty Detection Experiments")
+    add_data_dir_arg(parser, required=True)
+    add_cache_dir_arg(parser, project_root)
+    add_sampling_args(parser)
+    add_seed_arg(parser)
+    add_nu_arg(parser)
+    args = parser.parse_args()
     
     logger.info("=====================================================")
     logger.info(" COLON CANCER SOMATIC DETECTION: DEEP LEARNING KERNEL")

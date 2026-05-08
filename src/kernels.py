@@ -51,6 +51,14 @@ def generate_mkl_weights(max_k: int, noise_threshold: int = 2, scaling: str = 'l
     return [round(weight / total, 4) for weight in weights]
 
 
+def ensure_mkl_weights(max_k: int, mismatches: int, mkl_weights: Optional[List[float]]) -> List[float]:
+    if mkl_weights is not None:
+        return mkl_weights
+
+    noise_threshold = max(1, 2 * mismatches)
+    return generate_mkl_weights(max_k, noise_threshold=noise_threshold)
+
+
 @lru_cache(maxsize=100000)
 def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: Tuple[str, ...] = EPIGENETIC_ALPHABET) -> List[str]:
     """

@@ -24,7 +24,17 @@ sys.path.append(project_root)
 
 from src.data_utils import load_patient_cohort
 from src.kernels import extract_features, generate_mkl_weights
-from experiments.experiments_utils import setup_logger, parse_arguments
+from experiments.experiments_utils import (
+    setup_logger,
+    create_base_parser,
+    add_data_dir_arg,
+    add_cache_dir_arg,
+    add_sampling_args,
+    add_seed_arg,
+    add_kernel_args,
+    add_nu_arg,
+    add_execution_args,
+)
 
 logger = setup_logger(__name__)
 
@@ -62,7 +72,15 @@ def evaluate_primal_detector(X_train: sp.csr_matrix, X_test: sp.csr_matrix, y_te
     return auc, report_str
 
 def main():
-    args = parse_arguments(project_root)
+    parser = create_base_parser("Run Sequence Novelty Detection Experiments")
+    add_data_dir_arg(parser, required=True)
+    add_cache_dir_arg(parser, project_root)
+    add_sampling_args(parser)
+    add_seed_arg(parser)
+    add_kernel_args(parser)
+    add_nu_arg(parser)
+    add_execution_args(parser)
+    args = parser.parse_args()
     
     logger.info("=====================================================")
     logger.info(" SCALABLE SOMATIC DETECTION: DATA-PARALLEL PRIMAL SPACE")

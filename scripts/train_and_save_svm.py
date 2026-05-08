@@ -16,18 +16,37 @@ sys.path.append(project_root)
 from src.data_utils import load_tracked_patient_cohort
 from src.kernels import generate_mkl_weights, mixed_string_kernel, normalize_gram
 from src.model_io import save_svm_model
-from experiments.experiments_utils import setup_logger, parse_arguments
+from experiments.experiments_utils import (
+    setup_logger,
+    create_base_parser,
+    add_data_dir_arg,
+    add_cache_dir_arg,
+    add_sampling_args,
+    add_seed_arg,
+    add_kernel_args,
+    add_nu_arg,
+    add_execution_args,
+    build_train_normal_files,
+)
 
 logger = setup_logger(__name__)
 
 def main():
-    args = parse_arguments(project_root)
+    parser = create_base_parser("Run Sequence Novelty Detection Experiments")
+    add_data_dir_arg(parser, required=True)
+    add_cache_dir_arg(parser, project_root)
+    add_sampling_args(parser)
+    add_seed_arg(parser)
+    add_kernel_args(parser)
+    add_nu_arg(parser)
+    add_execution_args(parser)
+    args = parser.parse_args()
     logger.info("=====================================================")
     logger.info(" COLON CANCER SOMATIC DETECTION: PURE MODEL TRAINING")
     logger.info("=====================================================")
     
     # 1. Define ONLY the Training Split (Healthy Baseline)
-    train_normal_files = [os.path.join(args.data_dir, f"Healthy_{i}_merged_subset_1200000.fa") for i in range(2, 6)]
+    train_normal_files = build_train_normal_files(args.data_dir)
     
     # 2. Load Data (Pass empty lists for the test sets)
     logger.info("Loading training cohort...")

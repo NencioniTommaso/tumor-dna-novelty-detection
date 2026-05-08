@@ -29,6 +29,11 @@ def save_svm_model(svm, train_sequences, max_k, mismatches, nu_param, save_path,
 
 
 def load_svm_model(model_path, logger):
+    """
+    Load a precomputed-kernel OC-SVM artifact.
+
+    Returns (svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold).
+    """
     if not os.path.exists(model_path):
         logger.error(f"Model file not found at {model_path}")
         raise FileNotFoundError(model_path)
