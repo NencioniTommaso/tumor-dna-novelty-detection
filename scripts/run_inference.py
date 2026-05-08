@@ -84,6 +84,19 @@ def main():
     logger.info(f" FINAL ANOMALY SCORE: {patient_score:.4f}")
     logger.info("=====================================================\n")
 
+    if 'optimal_threshold' not in saved_state:
+        logger.warning("Model has not been calibrated! Run calibrate_threshold.py first.")
+        logger.warning("Cannot provide a definitive Tumor/Healthy diagnosis.")
+    else:
+        clinical_threshold = saved_state['optimal_threshold']
+        
+        if patient_score >= clinical_threshold:
+            diagnosis = "🚨 TUMOR DETECTED"
+        else:
+            diagnosis = "✅ HEALTHY"
+        
+        logger.info(f" DIAGNOSIS: {diagnosis}")
+
 
 if __name__ == "__main__":
     main()

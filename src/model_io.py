@@ -41,5 +41,6 @@ def load_svm_model(model_path, logger):
     max_k = saved_state.get('max_k')
     mismatches = saved_state.get('mismatches')
     mkl_weights = saved_state.get('mkl_weights')
+    optimal_threshold = saved_state.get('optimal_threshold')
 
-    return svm, train_sequences, max_k, mismatches, mkl_weights
+    return svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold

@@ -31,7 +31,6 @@ IUPAC_MAP = {
     'N': ['A', 'C', 'G', 'T']
 }
 
-
 def generate_mkl_weights(max_k: int, noise_threshold: int = 2, scaling: str = 'linear') -> list[float]:
     """
     Generates normalized Multiple Kernel Learning weights while suppressing short noisy k-mers.
@@ -245,50 +244,132 @@ def normalize_gram(K: np.ndarray) -> np.ndarray:
     return K * inv_sqrt_diag[:, None] * inv_sqrt_diag[None, :]
 
 
+# PART FOR CALIBRATION AND INFERENCE
 
-
-def compute_asymmetric_normalized_kernel(test_seqs: List[str], train_seqs: List[str], max_k: int, mismatches: int, mkl_weights: List[float]) -> np.ndarray:
+def _compute_asymmetric_block_pair(X_test: sp.csr_matrix, X_train: sp.csr_matrix, r_start: int, r_end: int, c_start: int, c_end: int):
     """
-    Computes ONLY the Test vs Train block of the Gram matrix and normalizes it.
-    Bypasses the N^2 dense matrix calculation completely for extreme memory efficiency.
+    Computes a rectangular block intersection of the Asymmetric Gram matrix: 
+    X_test[r_start:r_end] * X_train[c_start:c_end]^T
+    """
+    block_val = X_test[r_start:r_end].dot(X_train[c_start:c_end].T).toarray()
+    return r_start, r_end, c_start, c_end, block_val
+
+
+def _extract_and_compute_asymmetric_k(
+    test_seqs: List[str], 
+    train_seqs: List[str], 
+    k: int, 
+    m: int, 
+    weight: float, 
+    n_inner_jobs: int = -1, 
+    block_size: int = 1500
+):
+    """
+    Module-level worker function to compute the cross-block and diagonals for a single k-mer.
+    Because it is at the module level, joblib will not suffer from closure serialization overhead.
     """
     num_test = len(test_seqs)
     num_train = len(train_seqs)
-    all_seqs = test_seqs + train_seqs
 
-    # Accumulators
+    if weight == 0.0:
+        return (np.zeros((num_test, num_train), dtype=np.float64), 
+                np.zeros(num_test, dtype=np.float64), 
+                np.zeros(num_train, dtype=np.float64))
+
+    # 1. Extract combined features to ensure vocabulary alignment
+    logger.debug(f"Extracting asymmetric features for k={k}, m={m} (weight={weight})...")
+    X_combined = extract_features(test_seqs + train_seqs, k=k, m=m)
+    X_combined = X_combined.multiply(np.sqrt(weight))
+
+    # 2. Slice the sparse matrices cleanly
+    X_test = X_combined[:num_test, :]
+    X_train = X_combined[num_test:, :]
+
+    K_part = np.zeros((num_test, num_train), dtype=np.float64)
+
+    # Fast path for small data
+    if num_test * num_train <= block_size * block_size:
+        K_part = X_test.dot(X_train.T).toarray()
+    else:
+        # Define independent block ranges
+        test_ranges = [(i, min(i + block_size, num_test)) for i in range(0, num_test, block_size)]
+        train_ranges = [(i, min(i + block_size, num_train)) for i in range(0, num_train, block_size)]
+
+        tasks = [(rs, re, cs, ce) for rs, re in test_ranges for cs, ce in train_ranges]
+
+        # Execute block-pairs using inner threads
+        results_blocks = Parallel(n_jobs=n_inner_jobs, prefer="threads")(
+            delayed(_compute_asymmetric_block_pair)(X_test, X_train, rs, re, cs, ce) 
+            for rs, re, cs, ce in tasks
+        )
+
+        # Assemble the partial asymmetric matrix
+        for rs, re, cs, ce, block_val in results_blocks:
+            K_part[rs:re, cs:ce] = block_val
+
+    # 3. Compute diagonals rapidly using sparse row sums
+    diag_test_part = np.array(X_test.multiply(X_test).sum(axis=1)).flatten()
+    diag_train_part = np.array(X_train.multiply(X_train).sum(axis=1)).flatten()
+
+    return K_part, diag_test_part, diag_train_part
+
+
+def compute_asymmetric_normalized_kernel(
+    test_seqs: List[str],
+    train_seqs: List[str],
+    max_k: int,
+    mismatches: int,
+    mkl_weights: List[float],
+    n_jobs: int = -1,
+) -> np.ndarray:
+    """
+    Computes ONLY the Test vs Train block of the Gram matrix and normalizes it.
+    Uses Hierarchical Parallelization identical to the training kernel.
+    """
+    num_test = len(test_seqs)
+    num_train = len(train_seqs)
+    
     K_cross = np.zeros((num_test, num_train), dtype=np.float64)
     diag_test = np.zeros(num_test, dtype=np.float64)
     diag_train = np.zeros(num_train, dtype=np.float64)
 
-    for k in range(1, max_k + 1):
-        weight = mkl_weights[k-1]
-        if weight == 0.0:
-            continue
+    active_ks = [k for k in range(1, max_k + 1) if mkl_weights[k - 1] != 0.0]
 
-        # 1. Extract combined features to ensure vocabulary alignment between Test and Train
-        X_combined = extract_features(all_seqs, k=k, m=mismatches)
-        X_combined = X_combined.multiply(np.sqrt(weight))
+    if not active_ks:
+        return K_cross # Failsafe
 
-        # 2. Slice the sparse matrices (Virtually zero memory cost)
-        X_test = X_combined[:num_test, :]
-        X_train = X_combined[num_test:, :]
+    total_cores = os.cpu_count() if n_jobs == -1 else n_jobs
+    large_ks = [k for k in active_ks if k > 3]
+    n_outer = max(1, len(large_ks))
+    inner_cores = max(1, total_cores // n_outer)
 
-        # 3. Compute ONLY the asymmetric cross-block (Test vs Train)
-        K_cross += X_test.dot(X_train.T).toarray()
+    logger.info(f"Computing Asymmetric Kernel for {num_test}x{num_train} | Cores allocated: {total_cores}")
 
-        # 4. Compute diagonals (self-similarity) WITHOUT dense matrix multiplication
-        diag_test += np.array(X_test.multiply(X_test).sum(axis=1)).flatten()
-        diag_train += np.array(X_train.multiply(X_train).sum(axis=1)).flatten()
+    def _jobs_for_k(k):
+        return inner_cores if k > 3 else 1
 
-    # 5. Apply SVDD Normalization Formula
+    # Outer parallelism maps across active k-mers
+    per_k_results = Parallel(n_jobs=n_jobs)(
+        delayed(_extract_and_compute_asymmetric_k)(
+            test_seqs, train_seqs, k, mismatches, mkl_weights[k-1], _jobs_for_k(k)
+        )
+        for k in active_ks
+    )
+
+    # Accumulate results
+    logger.info("Fusing asymmetric sub-grams and normalizing...")
+    for K_part, dt_part, dtr_part in per_k_results:
+        K_cross += K_part
+        diag_test += dt_part
+        diag_train += dtr_part
+
+    # Apply SVDD Normalization Formula
     diag_test_safe = np.maximum(diag_test, 1e-12)
     diag_train_safe = np.maximum(diag_train, 1e-12)
 
     inv_sqrt_test = 1.0 / np.sqrt(diag_test_safe)
     inv_sqrt_train = 1.0 / np.sqrt(diag_train_safe)
 
-    # Fast broadcasting: K(i,j) / sqrt(K(i,i) * K(j,j))
     K_cross_norm = K_cross * inv_sqrt_test[:, None] * inv_sqrt_train[None, :]
 
     return K_cross_norm
