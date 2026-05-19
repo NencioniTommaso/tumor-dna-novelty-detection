@@ -44,7 +44,7 @@ def generate_dna_vocab(k: int) -> dict:
 
 def _extract_scaled_chunk(chunk: list[str], k: int, mismatches: int, weight: float, vocab: dict) -> sp.csr_matrix:
     """Worker function: Extracts features for a data chunk using a fixed vocabulary."""
-    X_k = extract_features(chunk, k=k, m=mismatches, vocabulary=vocab)
+    X_k, _ = extract_features(chunk, k=k, m=mismatches, vocabulary=vocab)
     return X_k.multiply(np.sqrt(weight))
 
 def evaluate_primal_detector(X_train: sp.csr_matrix, X_test: sp.csr_matrix, y_test_true: np.ndarray, nu: float, seed: int):

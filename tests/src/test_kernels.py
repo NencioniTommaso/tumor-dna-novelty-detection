@@ -117,14 +117,14 @@ def test_mismatch_analyzer():
 
 def test_extract_and_compute_gram_short_circuit(sample_sequences):
     """Test that a weight of 0.0 successfully bypasses computation to save CPU."""
-    gram = _extract_and_compute_gram_k_symmetric(sample_sequences, k=3, m=2, weight=0.0)
+    gram, _ = _extract_and_compute_gram_k_symmetric(sample_sequences, k=3, m=2, weight=0.0)
     assert isinstance(gram, np.ndarray)
     assert gram.shape == (4, 4)
     assert np.all(gram == 0.0)  # Matrix must be entirely zeros
 
 def test_mixed_string_kernel_shape(sample_sequences):
     """Test the full parallel multi-kernel fusion pipeline."""
-    K, sparse_output = mixed_string_kernel(
+    K, train_states = mixed_string_kernel(
         sequences=sample_sequences,
         k_max=3,
         m=1,
@@ -134,8 +134,7 @@ def test_mixed_string_kernel_shape(sample_sequences):
     
     assert isinstance(K, np.ndarray)
     assert K.shape == (4, 4)
-    # The new optimized pipeline returns None for the sparse matrix
-    assert sparse_output is None
+    assert isinstance(train_states, dict)
     
     # Gram matrix must be symmetric
     assert np.allclose(K, K.T)
@@ -146,7 +145,7 @@ def test_mixed_string_kernel_shape(sample_sequences):
 def test_asymmetric_kernel_matches_symmetric(sample_sequences):
     """Test asymmetric inference kernel matches symmetric normalization when test == train."""
     weights = [1.0, 0.0]
-    K_sym, _ = mixed_string_kernel(
+    K_sym, train_states = mixed_string_kernel(
         sequences=sample_sequences,
         k_max=2,
         m=0,
@@ -157,7 +156,7 @@ def test_asymmetric_kernel_matches_symmetric(sample_sequences):
 
     K_cross = compute_asymmetric_normalized_kernel(
         test_seqs=sample_sequences,
-        train_seqs=sample_sequences,
+        train_states=train_states,
         max_k=2,
         mismatches=0,
         mkl_weights=weights,

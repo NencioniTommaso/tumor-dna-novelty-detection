@@ -11,7 +11,7 @@ import joblib
 logger = logging.getLogger(__name__)
 
 
-def save_svm_model(svm, train_sequences, max_k, mismatches, nu_param, save_path, logger, mkl_weights=None):
+def save_svm_model(svm, train_sequences, max_k, mismatches, nu_param, save_path, logger, mkl_weights=None, train_states=None):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     state = {
@@ -21,6 +21,7 @@ def save_svm_model(svm, train_sequences, max_k, mismatches, nu_param, save_path,
         'mismatches': mismatches,
         'nu_param': nu_param,
         'mkl_weights': mkl_weights,
+        'train_states': train_states,
     }
 
     logger.info(f"Saving SVM state to {save_path}...")
@@ -47,5 +48,6 @@ def load_svm_model(model_path, logger):
     mismatches = saved_state.get('mismatches')
     mkl_weights = saved_state.get('mkl_weights')
     optimal_threshold = saved_state.get('optimal_threshold')
+    train_states = saved_state.get('train_states')
 
-    return svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold
+    return svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold, train_states

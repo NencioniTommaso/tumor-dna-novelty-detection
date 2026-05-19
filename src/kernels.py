@@ -107,7 +107,7 @@ def mismatch_analyzer(sequence: str, k: int, m: int = 1) -> List[str]:
     return expanded_kmers
 
 
-def extract_features(sequences: List[str], k: int, m: int = 0, vocabulary: Optional[dict] = None) -> sp.csr_matrix:
+def extract_features(sequences: List[str], k: int, m: int = 0, vocabulary: Optional[dict] = None) -> Tuple[sp.csr_matrix, dict]:
     """
     Extracts sequence features. 
     Accepts an optional fixed vocabulary to allow for stateless, chunked parallelization.
@@ -119,9 +119,10 @@ def extract_features(sequences: List[str], k: int, m: int = 0, vocabulary: Optio
     )
     
     if vocabulary is not None:
-        return vectorizer.transform(sequences)
+        return vectorizer.transform(sequences), vocabulary
         
-    return vectorizer.fit_transform(sequences)
+    X = vectorizer.fit_transform(sequences)
+    return X, vectorizer.vocabulary_
 
 
 def _compute_gram_block_pair(X_csr: sp.csr_matrix, r_start: int, r_end: int, c_start: int, c_end: int):
@@ -139,22 +140,30 @@ def _extract_and_compute_gram_k_symmetric(
     weight: float,
     n_inner_jobs: int = -1,
     block_size: int = 1500
-) -> np.ndarray:
+) -> Tuple[np.ndarray, dict]:
     
     if weight == 0.0:
-        return np.zeros((len(sequences), len(sequences)), dtype=np.float64)
+        return np.zeros((len(sequences), len(sequences)), dtype=np.float64), {}
 
     logger.debug(f"Extracting features for k={k}, m={m} (weight={weight})...")
-    X_k = extract_features(sequences, k, m)
+    X_k, vocab = extract_features(sequences, k, m)
     X_k = X_k.multiply(np.sqrt(weight))
     
+    diag_train = np.array(X_k.multiply(X_k).sum(axis=1)).flatten()
+    train_state = {
+        'k': k,
+        'vocabulary': vocab,
+        'X_train': X_k,
+        'diag_train': diag_train
+    }
+
     N = X_k.shape[0]
     K = np.zeros((N, N), dtype=np.float64)
     
     if N <= block_size:
         logger.debug(f"Computing exact Gram matrix directly for N={N} (k={k})")
         K_full = X_k.dot(X_k.T).toarray()
-        return K_full
+        return K_full, train_state
     
     ranges = [(i, min(i + block_size, N)) for i in range(0, N, block_size)]
     
@@ -175,7 +184,7 @@ def _extract_and_compute_gram_k_symmetric(
         if rs != cs:
             K[cs:ce, rs:re] = block_val.T
             
-    return K
+    return K, train_state
 
 
 def mixed_string_kernel(
@@ -184,7 +193,7 @@ def mixed_string_kernel(
     m: int = 0, 
     weights: Optional[List[float]] = None,
     n_jobs: int = -1
-) -> Tuple[np.ndarray, Optional[sp.csr_matrix]]:
+) -> Tuple[np.ndarray, dict]:
     
     if weights is None:
         weights = [1.0] * k_max
@@ -204,7 +213,7 @@ def mixed_string_kernel(
     def _jobs_for_k(k):
         return inner_cores if k > 3 else 1
 
-    sub_grams = Parallel(n_jobs=n_jobs)(
+    per_k_results = Parallel(n_jobs=n_jobs)(
         delayed(_extract_and_compute_gram_k_symmetric)(
             sequences, k, m, weights[k-1], 
             n_inner_jobs=_jobs_for_k(k)
@@ -213,7 +222,10 @@ def mixed_string_kernel(
     )
 
     logger.info("Fusing sub-grams into final kernel...")
-    return sum(sub_grams), None
+    sub_grams = [res[0] for res in per_k_results]
+    train_states = {res[1]['k']: res[1] for res in per_k_results if res[1]}
+    
+    return sum(sub_grams), train_states
 
 
 def normalize_gram(K: np.ndarray) -> np.ndarray:
@@ -243,7 +255,7 @@ def _compute_asymmetric_block_pair(X_test: sp.csr_matrix, X_train: sp.csr_matrix
 
 def _extract_and_compute_asymmetric_k(
     test_seqs: List[str], 
-    train_seqs: List[str], 
+    train_state_k: dict, 
     k: int, 
     m: int, 
     weight: float, 
@@ -251,24 +263,33 @@ def _extract_and_compute_asymmetric_k(
     block_size: int = 1500
 ):
     num_test = len(test_seqs)
-    num_train = len(train_seqs)
-
-    if weight == 0.0:
+    
+    if weight == 0.0 or train_state_k is None:
+        num_train = train_state_k['X_train'].shape[0] if train_state_k else 0
         return (np.zeros((num_test, num_train), dtype=np.float64), 
                 np.zeros(num_test, dtype=np.float64), 
-                np.zeros(num_train, dtype=np.float64))
+                np.zeros(num_train, dtype=np.float64) if num_train > 0 else None)
+
+    X_train = train_state_k['X_train']
+    vocab = train_state_k['vocabulary']
+    diag_train_part = train_state_k['diag_train']
+    num_train = X_train.shape[0]
 
     logger.debug(f"Extracting asymmetric features for k={k}, m={m} (weight={weight})...")
-    X_combined = extract_features(test_seqs + train_seqs, k=k, m=m)
-    X_combined = X_combined.multiply(np.sqrt(weight))
+    
+    # 1. Compute Test Self-Norm exactly using its own vocabulary
+    X_test_self, _ = extract_features(test_seqs, k=k, m=m)
+    X_test_self = X_test_self.multiply(np.sqrt(weight))
+    diag_test_part = np.array(X_test_self.multiply(X_test_self).sum(axis=1)).flatten()
 
-    X_test = X_combined[:num_test, :]
-    X_train = X_combined[num_test:, :]
+    # 2. Compute Cross-Terms using Train Vocabulary
+    X_test_cross, _ = extract_features(test_seqs, k=k, m=m, vocabulary=vocab)
+    X_test_cross = X_test_cross.multiply(np.sqrt(weight))
 
     K_part = np.zeros((num_test, num_train), dtype=np.float64)
 
     if num_test * num_train <= block_size * block_size:
-        K_part = X_test.dot(X_train.T).toarray()
+        K_part = X_test_cross.dot(X_train.T).toarray()
     else:
         test_ranges = [(i, min(i + block_size, num_test)) for i in range(0, num_test, block_size)]
         train_ranges = [(i, min(i + block_size, num_train)) for i in range(0, num_train, block_size)]
@@ -276,22 +297,19 @@ def _extract_and_compute_asymmetric_k(
         tasks = [(rs, re, cs, ce) for rs, re in test_ranges for cs, ce in train_ranges]
 
         results_blocks = Parallel(n_jobs=n_inner_jobs, prefer="threads")(
-            delayed(_compute_asymmetric_block_pair)(X_test, X_train, rs, re, cs, ce) 
+            delayed(_compute_asymmetric_block_pair)(X_test_cross, X_train, rs, re, cs, ce) 
             for rs, re, cs, ce in tasks
         )
 
         for rs, re, cs, ce, block_val in results_blocks:
             K_part[rs:re, cs:ce] = block_val
 
-    diag_test_part = np.array(X_test.multiply(X_test).sum(axis=1)).flatten()
-    diag_train_part = np.array(X_train.multiply(X_train).sum(axis=1)).flatten()
-
     return K_part, diag_test_part, diag_train_part
 
 
 def compute_asymmetric_normalized_kernel(
     test_seqs: List[str],
-    train_seqs: List[str],
+    train_states: dict,
     max_k: int,
     mismatches: int,
     mkl_weights: List[float],
@@ -299,7 +317,15 @@ def compute_asymmetric_normalized_kernel(
 ) -> np.ndarray:
     
     num_test = len(test_seqs)
-    num_train = len(train_seqs)
+    # Determine num_train from any valid train_state
+    num_train = 0
+    for k_val, state in train_states.items():
+        if state is not None:
+            num_train = state['X_train'].shape[0]
+            break
+            
+    if num_train == 0:
+        raise ValueError("Invalid train_states dictionary provided.")
     
     K_cross = np.zeros((num_test, num_train), dtype=np.float64)
     diag_test = np.zeros(num_test, dtype=np.float64)
@@ -322,7 +348,7 @@ def compute_asymmetric_normalized_kernel(
 
     per_k_results = Parallel(n_jobs=n_jobs)(
         delayed(_extract_and_compute_asymmetric_k)(
-            test_seqs, train_seqs, k, mismatches, mkl_weights[k-1], _jobs_for_k(k)
+            test_seqs, train_states.get(k), k, mismatches, mkl_weights[k-1], _jobs_for_k(k)
         )
         for k in active_ks
     )

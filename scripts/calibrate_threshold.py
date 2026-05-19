@@ -47,7 +47,7 @@ def main():
     logger.info("=====================================================")
 
     # 1. Load the Pretrained Model
-    svm, train_sequences, max_k, mismatches, mkl_weights, _ = load_svm_model(model_path, logger)
+    svm, train_sequences, max_k, mismatches, mkl_weights, _, train_states = load_svm_model(model_path, logger)
     
     mkl_weights = ensure_mkl_weights(max_k, mismatches, mkl_weights)
 
@@ -65,7 +65,7 @@ def main():
     logger.info(f"Computing asymmetric kernel for {len(val_data)} validation sequences...")
     K_val = compute_asymmetric_normalized_kernel(
         test_seqs=val_data,
-        train_seqs=train_sequences,
+        train_states=train_states,
         max_k=max_k,
         mismatches=mismatches,
         mkl_weights=mkl_weights

@@ -60,7 +60,7 @@ def main():
     mkl_weights = generate_mkl_weights(args.max_k, noise_threshold=max(1, 2 * args.mismatches))
     logger.info(f"\nComputing Explicit Sparse Mismatch Kernel (Train x Train)...")
     
-    K_train, _ = mixed_string_kernel(
+    K_train, train_states = mixed_string_kernel(
         sequences=train_data, 
         k_max=args.max_k, 
         m=args.mismatches, 
@@ -88,6 +88,7 @@ def main():
         mkl_weights=mkl_weights,
         save_path=save_path,
         logger=logger,
+        train_states=train_states,
     )
 
     elapsed = time.perf_counter() - start_time

@@ -41,7 +41,7 @@ def main():
 
     start_time = time.perf_counter()
 
-    svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold = load_svm_model(
+    svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold, train_states = load_svm_model(
         args.model_path, logger
     )
     logger.info(f"Loaded SVM trained on {len(train_sequences)} sequences.")
@@ -64,7 +64,7 @@ def main():
 
     K_test = compute_asymmetric_normalized_kernel(
         test_seqs=new_patient_sequences,
-        train_seqs=train_sequences,
+        train_states=train_states,
         max_k=max_k,
         mismatches=mismatches,
         mkl_weights=mkl_weights,
