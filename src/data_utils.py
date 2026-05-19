@@ -48,6 +48,9 @@ class MMapFastaReader:
     def __init__(self, fasta_path: str, index_cache_dir: str = None):
         self.offsets = array('Q')
         self.lengths = array('I')
+        fasta_path = os.path.abspath(fasta_path)
+        if not os.path.exists(fasta_path):
+            raise FileNotFoundError(f"FASTA file not found: {fasta_path}")
 
         # 1. Handle read-only directories by symlinking to a local cache
         if index_cache_dir:
@@ -55,8 +58,14 @@ class MMapFastaReader:
             filename = os.path.basename(fasta_path)
             symlink_path = os.path.join(index_cache_dir, filename)
             
-            # Create a symlink to the original file if it doesn't exist
-            if not os.path.exists(symlink_path):
+            # Reuse an existing valid cache link; otherwise replace stale entries.
+            if os.path.lexists(symlink_path):
+                if os.path.islink(symlink_path) and os.readlink(symlink_path) == fasta_path:
+                    pass
+                else:
+                    os.remove(symlink_path)
+                    os.symlink(fasta_path, symlink_path)
+            else:
                 os.symlink(fasta_path, symlink_path)
             
             target_fasta_for_index = symlink_path
