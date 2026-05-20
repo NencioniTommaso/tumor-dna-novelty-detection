@@ -7,6 +7,7 @@ Updates the model artifact with this threshold.
 
 import os
 import sys
+import time
 import joblib
 import numpy as np
 from sklearn.metrics import roc_curve, roc_auc_score
@@ -45,6 +46,8 @@ def main():
     logger.info("=====================================================")
     logger.info(" PHASE 2: MODEL CALIBRATION & THRESHOLD TUNING")
     logger.info("=====================================================")
+
+    start_time = time.perf_counter()
 
     # 1. Load the Pretrained Model
     svm, train_sequences, max_k, mismatches, mkl_weights, _, train_states = load_svm_model(model_path)
@@ -114,6 +117,9 @@ def main():
     joblib.dump(saved_state, model_path)
     
     logger.info("Calibration complete. Pipeline is ready for production inference.")
+
+    elapsed = time.perf_counter() - start_time
+    logger.info(f"Calibration time: {elapsed:.2f} seconds")
 
 if __name__ == "__main__":
     main()
