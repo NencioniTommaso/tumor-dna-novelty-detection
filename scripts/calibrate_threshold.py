@@ -24,7 +24,7 @@ from experiments.experiments_utils import (
     create_base_parser,
     add_data_dir_arg,
     add_cache_dir_arg,
-    add_sampling_args,
+    add_test_sampling_args,
     add_seed_arg,
     add_model_path_arg,
     build_validation_files,
@@ -36,7 +36,7 @@ def main():
     parser = create_base_parser("Calibrate a pretrained model and update decision threshold.")
     add_data_dir_arg(parser, required=True)
     add_cache_dir_arg(parser, project_root)
-    add_sampling_args(parser)
+    add_test_sampling_args(parser)
     add_seed_arg(parser)
     add_model_path_arg(parser, project_root)
     args = parser.parse_args()
@@ -47,7 +47,7 @@ def main():
     logger.info("=====================================================")
 
     # 1. Load the Pretrained Model
-    svm, train_sequences, max_k, mismatches, mkl_weights, _, train_states = load_svm_model(model_path, logger)
+    svm, train_sequences, max_k, mismatches, mkl_weights, _, train_states = load_svm_model(model_path)
     
     mkl_weights = ensure_mkl_weights(max_k, mismatches, mkl_weights)
 
@@ -58,7 +58,7 @@ def main():
     logger.info("Loading validation cohort...")
     # Notice we pass empty brackets for the training files, because we already have train_sequences!
     _, val_data, _, val_files_info = load_tracked_patient_cohort(
-        [], val_normal_files, val_tumor_files, args, logger
+        [], val_normal_files, val_tumor_files, 0, args.max_test_normal, args.max_test_tumor, args.seed, args.cache_dir, logger
     )
     
     # 3. Compute Inference Kernel for the Validation Set

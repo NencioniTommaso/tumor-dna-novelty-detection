@@ -7,8 +7,6 @@ Aggregates sequence-level anomaly scores to evaluate true patient-level ROC-AUC.
 import time
 import sys
 import os
-import numpy as np
-from sklearn.metrics import roc_auc_score
 
 # Dynamically resolve paths to ensure the script runs from anywhere
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -24,7 +22,8 @@ from experiments.experiments_utils import (
     create_base_parser,
     add_data_dir_arg,
     add_cache_dir_arg,
-    add_sampling_args,
+    add_train_sampling_arg,
+    add_test_sampling_args,
     add_seed_arg,
     add_kernel_args,
     add_nu_arg,
@@ -40,7 +39,8 @@ def main():
     parser = create_base_parser("Run Sequence Novelty Detection Experiments")
     add_data_dir_arg(parser, required=True)
     add_cache_dir_arg(parser, project_root)
-    add_sampling_args(parser)
+    add_train_sampling_arg(parser)
+    add_test_sampling_args(parser)
     add_seed_arg(parser)
     add_kernel_args(parser)
     add_nu_arg(parser)
@@ -65,7 +65,11 @@ def main():
         train_normal_files, 
         test_normal_files, 
         test_tumor_files,
-        args,
+        args.max_train,
+        args.max_test_normal,
+        args.max_test_tumor,
+        args.seed,
+        args.cache_dir,
         logger
     )
     

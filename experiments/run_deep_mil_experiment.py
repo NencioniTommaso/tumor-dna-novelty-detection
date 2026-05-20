@@ -22,7 +22,8 @@ from experiments.experiments_utils import (
     create_base_parser,
     add_data_dir_arg,
     add_cache_dir_arg,
-    add_sampling_args,
+    add_train_sampling_arg,
+    add_test_sampling_args,
     add_seed_arg,
     add_nu_arg,
     build_default_cohorts,
@@ -36,7 +37,8 @@ def main():
     parser = create_base_parser("Run Sequence Novelty Detection Experiments")
     add_data_dir_arg(parser, required=True)
     add_cache_dir_arg(parser, project_root)
-    add_sampling_args(parser)
+    add_train_sampling_arg(parser)
+    add_test_sampling_args(parser)
     add_seed_arg(parser)
     add_nu_arg(parser)
     args = parser.parse_args()
@@ -59,7 +61,11 @@ def main():
         train_normal_files,
         test_normal_files,
         test_tumor_files,
-        args,
+        args.max_train,
+        args.max_test_normal,
+        args.max_test_tumor,
+        args.seed,
+        args.cache_dir,
         logger
     )
     

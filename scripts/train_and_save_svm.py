@@ -21,7 +21,7 @@ from experiments.experiments_utils import (
     create_base_parser,
     add_data_dir_arg,
     add_cache_dir_arg,
-    add_sampling_args,
+    add_train_sampling_arg,
     add_seed_arg,
     add_kernel_args,
     add_nu_arg,
@@ -35,7 +35,7 @@ def main():
     parser = create_base_parser("Run Sequence Novelty Detection Experiments")
     add_data_dir_arg(parser, required=True)
     add_cache_dir_arg(parser, project_root)
-    add_sampling_args(parser)
+    add_train_sampling_arg(parser)
     add_seed_arg(parser)
     add_kernel_args(parser)
     add_nu_arg(parser)
@@ -51,7 +51,7 @@ def main():
     # 2. Load Data (Pass empty lists for the test sets)
     logger.info("Loading training cohort...")
     train_data, _, _, _ = load_tracked_patient_cohort(
-        train_normal_files, [], [], args, logger
+        train_normal_files, [], [], args.max_train, 0, 0, args.seed, args.cache_dir, logger
     )
 
     start_time = time.perf_counter()
@@ -87,7 +87,6 @@ def main():
         nu_param=args.nu_param,
         mkl_weights=mkl_weights,
         save_path=save_path,
-        logger=logger,
         train_states=train_states,
     )
 

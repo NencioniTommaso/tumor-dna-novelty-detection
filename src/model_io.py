@@ -11,7 +11,7 @@ import joblib
 logger = logging.getLogger(__name__)
 
 
-def save_svm_model(svm, train_sequences, max_k, mismatches, nu_param, save_path, logger, mkl_weights=None, train_states=None):
+def save_svm_model(svm, train_sequences, max_k, mismatches, nu_param, save_path, mkl_weights=None, train_states=None):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     state = {
@@ -29,11 +29,11 @@ def save_svm_model(svm, train_sequences, max_k, mismatches, nu_param, save_path,
     logger.info("Model saved successfully!")
 
 
-def load_svm_model(model_path, logger):
+def load_svm_model(model_path):
     """
     Load a precomputed-kernel OC-SVM artifact.
 
-    Returns (svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold).
+    Returns (svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold, train_states).
     """
     if not os.path.exists(model_path):
         logger.error(f"Model file not found at {model_path}")

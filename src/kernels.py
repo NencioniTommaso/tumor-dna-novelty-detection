@@ -60,13 +60,13 @@ def ensure_mkl_weights(max_k: int, mismatches: int, mkl_weights: Optional[List[f
 
 
 @lru_cache(maxsize=100000)
-def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: Tuple[str, ...] = EPIGENETIC_ALPHABET) -> List[str]:
+def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: Tuple[str, ...] = EPIGENETIC_ALPHABET) -> Tuple[str, ...]:
     """
     Generates all k-mers within 'm' mismatches of the given kmer.
     Uses the 6-letter epigenetic alphabet to generate states.
     """
     if m == 0:
-        return [kmer]
+        return (kmer,)
         
     neighborhood = set([kmer])
     kmer_list = list(kmer)
@@ -89,7 +89,7 @@ def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: Tuple[str, .
                     
                     neighborhood.add("".join(mutated_kmer))
                     
-    return list(neighborhood)
+    return tuple(neighborhood)
 
 
 def mismatch_analyzer(sequence: str, k: int, m: int = 1) -> List[str]:

@@ -1,15 +1,13 @@
 """
 data_utils.py
-Handles data simulation and generation for DNA sequence anomaly detection.
-Optimized with vectorized NumPy operations for fast, large-scale dataset generation,
-and Numba JIT compilation to eliminate I/O parsing bottlenecks.
+Handles fast FASTA file reading and cohort loading for DNA sequence anomaly detection.
+Optimized with mmap, .fai indexing, and Numba JIT compilation to eliminate I/O bottlenecks.
 """
 
 import os
 import mmap
 import logging
 from array import array
-from typing import Tuple, List
 
 import numpy as np
 import pysam
@@ -127,8 +125,8 @@ class MMapFastaReader:
         self._file.close()
 
 
-def load_tracked_patient_cohort(train_normal_files, test_normal_files, test_tumor_files, args, logger):
-    np.random.seed(args.seed)
+def load_tracked_patient_cohort(train_normal_files, test_normal_files, test_tumor_files, max_train: int, max_test_normal: int, max_test_tumor: int, seed: int, cache_dir: str, logger):
+    np.random.seed(seed)
 
     def _read_and_track(file_list, desc, max_total_seqs, label):
         if not file_list:
@@ -140,7 +138,7 @@ def load_tracked_patient_cohort(train_normal_files, test_normal_files, test_tumo
 
         for file_path in file_list:
             logger.info(f"  -> Loading {desc}: {os.path.basename(file_path)}")
-            reader = MMapFastaReader(file_path, index_cache_dir=args.cache_dir)
+            reader = MMapFastaReader(file_path, index_cache_dir=cache_dir)
             total_available = len(reader.offsets)
             num_to_sample = min(seqs_per_file, total_available)
             sampled_indices = np.random.choice(total_available, num_to_sample, replace=False)
@@ -160,11 +158,11 @@ def load_tracked_patient_cohort(train_normal_files, test_normal_files, test_tumo
         return all_seqs, files_info
 
     logger.info("--- Loading Training Data (Healthy Baseline) ---")
-    train_data, _ = _read_and_track(train_normal_files, "Train (Normal)", args.max_train, None)
+    train_data, _ = _read_and_track(train_normal_files, "Train (Normal)", max_train, None)
 
     logger.info("\n--- Loading Testing Data (Tracked Instances) ---")
-    test_normal_data, normal_info = _read_and_track(test_normal_files, "Test (Normal)", args.max_test_normal, 1)
-    test_tumor_data, tumor_info = _read_and_track(test_tumor_files, "Test (Tumor)", args.max_test_tumor, -1)
+    test_normal_data, normal_info = _read_and_track(test_normal_files, "Test (Normal)", max_test_normal, 1)
+    test_tumor_data, tumor_info = _read_and_track(test_tumor_files, "Test (Tumor)", max_test_tumor, -1)
 
     test_data = test_normal_data + test_tumor_data
     test_files_info = normal_info + tumor_info

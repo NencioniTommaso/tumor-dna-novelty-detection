@@ -42,7 +42,7 @@ def main():
     start_time = time.perf_counter()
 
     svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold, train_states = load_svm_model(
-        args.model_path, logger
+        args.model_path
     )
     logger.info(f"Loaded SVM trained on {len(train_sequences)} sequences.")
 
@@ -87,9 +87,7 @@ def main():
         logger.warning("Model has not been calibrated! Run calibrate_threshold.py first.")
         logger.warning("Cannot provide a definitive Tumor/Healthy diagnosis.")
     else:
-        clinical_threshold = optimal_threshold
-        
-        if patient_score >= clinical_threshold:
+        if patient_score >= optimal_threshold:
             diagnosis = "🚨 TUMOR DETECTED"
         else:
             diagnosis = "✅ HEALTHY"

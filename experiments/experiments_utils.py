@@ -66,13 +66,16 @@ def add_nu_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_sampling_args(parser: argparse.ArgumentParser) -> None:
+def add_train_sampling_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-train",
         type=int,
         default=18000,
         help="Max normal sequences for training (default: 18000).",
     )
+
+
+def add_test_sampling_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-test-normal",
         type=int,

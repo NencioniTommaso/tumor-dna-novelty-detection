@@ -1,7 +1,7 @@
 """
 test_kernels.py
 Comprehensive unit and integration tests for the sequence anomaly detection kernels.
-Run this using: pytest tests/test_kernels.py -v
+Run this using: pytest tests/src/test_kernels.py -v
 """
 
 import numpy as np
@@ -165,6 +165,51 @@ def test_asymmetric_kernel_matches_symmetric(sample_sequences):
 
     assert K_cross.shape == K_sym_norm.shape
     assert np.allclose(K_cross, K_sym_norm, atol=1e-8)
+
+
+def test_asymmetric_kernel_matches_symmetric_split(sample_sequences):
+    """Test asymmetric inference kernel matches symmetric slicing for train vs test split."""
+    # Split sequences into train and test
+    train_seqs = sample_sequences[:2]
+    test_seqs = sample_sequences[2:]
+    
+    weights = [1.0, 0.0]
+    
+    # 1. Symmetric approach (compute full matrix, normalize, then slice)
+    full_seqs = train_seqs + test_seqs
+    K_full, _ = mixed_string_kernel(
+        sequences=full_seqs,
+        k_max=2,
+        m=0,
+        weights=weights,
+        n_jobs=1
+    )
+    K_full_norm = normalize_gram(K_full)
+    
+    # The slice representing test vs train
+    num_train = len(train_seqs)
+    K_slice_norm = K_full_norm[num_train:, :num_train]
+    
+    # 2. Asymmetric approach (compute train states, then asymmetric normalized kernel)
+    _, train_states = mixed_string_kernel(
+        sequences=train_seqs,
+        k_max=2,
+        m=0,
+        weights=weights,
+        n_jobs=1
+    )
+    
+    K_cross = compute_asymmetric_normalized_kernel(
+        test_seqs=test_seqs,
+        train_states=train_states,
+        max_k=2,
+        mismatches=0,
+        mkl_weights=weights,
+        n_jobs=1
+    )
+    
+    assert K_cross.shape == K_slice_norm.shape
+    assert np.allclose(K_cross, K_slice_norm, atol=1e-8)
 
 # --- 4. UNIT TESTS: NORMALIZATION ---
 
