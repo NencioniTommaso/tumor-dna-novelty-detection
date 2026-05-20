@@ -8,8 +8,7 @@ import logging
 import numpy as np
 from sklearn.svm import OneClassSVM
 from sklearn.metrics import classification_report, roc_auc_score
-from joblib import Parallel, delayed
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 # Configure the module-level logger
 logger = logging.getLogger(__name__)
@@ -56,6 +55,12 @@ def evaluate_novelty_detector(
     }
 
 
+def compute_patient_score(seq_scores, top_fraction: float = 0.05) -> float:
+    inverted_scores = -np.asarray(seq_scores)
+    top_k = max(1, int(len(inverted_scores) * top_fraction))
+    return float(np.mean(np.sort(inverted_scores)[-top_k:]))
+
+
 def evaluate_patient_level_novelty(anomaly_scores, test_files_info, logger):
     patient_y_true = []
     patient_scores = []
@@ -68,9 +73,7 @@ def evaluate_patient_level_novelty(anomaly_scores, test_files_info, logger):
         seq_scores = anomaly_scores[current_idx: current_idx + num_seqs]
         current_idx += num_seqs
 
-        inverted_scores = -np.asarray(seq_scores)
-        top_k = max(1, int(num_seqs * 0.05))
-        patient_score = np.mean(np.sort(inverted_scores)[-top_k:])
+        patient_score = compute_patient_score(seq_scores)
 
         patient_y_true.append(info['label'])
         patient_scores.append(patient_score)

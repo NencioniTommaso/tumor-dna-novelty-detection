@@ -1,11 +1,10 @@
 """
 test_kernels.py
 Comprehensive unit and integration tests for the sequence anomaly detection kernels.
-Run this using: pytest tests/test_kernels.py -v
+Run this using: pytest tests/src/test_kernels.py -v
 """
 
 import numpy as np
-import scipy.sparse as sp
 import pytest
 
 # Adjust import path if necessary based on your project structure
@@ -13,7 +12,8 @@ from src.kernels import (
     generate_mismatch_neighborhood,
     mismatch_analyzer,
     extract_features,
-    _extract_and_compute_gram_k,
+    _extract_and_compute_gram_k_symmetric,
+    compute_asymmetric_normalized_kernel,
     mixed_string_kernel,
     normalize_gram
 )
@@ -107,9 +107,9 @@ def test_mismatch_analyzer():
     # 3-mers of "ATGC" are "ATG" and "TGC"
     expanded = mismatch_analyzer(sequence, k, m)
     
-    # Using default alphabet (5 chars), m=1 for 3-mers = 13 variations each.
-    # Total should be 26.
-    assert len(expanded) == 26
+    # Using default alphabet (6 chars), m=1 for 3-mers = 16 variations each.
+    # Total should be 32.
+    assert len(expanded) == 32
     assert "ATG" in expanded
     assert "TGC" in expanded
 
@@ -117,14 +117,14 @@ def test_mismatch_analyzer():
 
 def test_extract_and_compute_gram_short_circuit(sample_sequences):
     """Test that a weight of 0.0 successfully bypasses computation to save CPU."""
-    gram = _extract_and_compute_gram_k(sample_sequences, k=3, m=2, weight=0.0)
+    gram, _ = _extract_and_compute_gram_k_symmetric(sample_sequences, k=3, m=2, weight=0.0)
     assert isinstance(gram, np.ndarray)
     assert gram.shape == (4, 4)
     assert np.all(gram == 0.0)  # Matrix must be entirely zeros
 
 def test_mixed_string_kernel_shape(sample_sequences):
     """Test the full parallel multi-kernel fusion pipeline."""
-    K, sparse_output = mixed_string_kernel(
+    K, train_states = mixed_string_kernel(
         sequences=sample_sequences,
         k_max=3,
         m=1,
@@ -134,13 +134,82 @@ def test_mixed_string_kernel_shape(sample_sequences):
     
     assert isinstance(K, np.ndarray)
     assert K.shape == (4, 4)
-    # The new optimized pipeline returns None for the sparse matrix
-    assert sparse_output is None
+    assert isinstance(train_states, dict)
     
     # Gram matrix must be symmetric
     assert np.allclose(K, K.T)
     # Diagonal values should be strictly positive
     assert np.all(np.diag(K) > 0)
+
+
+def test_asymmetric_kernel_matches_symmetric(sample_sequences):
+    """Test asymmetric inference kernel matches symmetric normalization when test == train."""
+    weights = [1.0, 0.0]
+    K_sym, train_states = mixed_string_kernel(
+        sequences=sample_sequences,
+        k_max=2,
+        m=0,
+        weights=weights,
+        n_jobs=1
+    )
+    K_sym_norm = normalize_gram(K_sym)
+
+    K_cross = compute_asymmetric_normalized_kernel(
+        test_seqs=sample_sequences,
+        train_states=train_states,
+        max_k=2,
+        mismatches=0,
+        mkl_weights=weights,
+        n_jobs=1
+    )
+
+    assert K_cross.shape == K_sym_norm.shape
+    assert np.allclose(K_cross, K_sym_norm, atol=1e-8)
+
+
+def test_asymmetric_kernel_matches_symmetric_split(sample_sequences):
+    """Test asymmetric inference kernel matches symmetric slicing for train vs test split."""
+    # Split sequences into train and test
+    train_seqs = sample_sequences[:2]
+    test_seqs = sample_sequences[2:]
+    
+    weights = [1.0, 0.0]
+    
+    # 1. Symmetric approach (compute full matrix, normalize, then slice)
+    full_seqs = train_seqs + test_seqs
+    K_full, _ = mixed_string_kernel(
+        sequences=full_seqs,
+        k_max=2,
+        m=0,
+        weights=weights,
+        n_jobs=1
+    )
+    K_full_norm = normalize_gram(K_full)
+    
+    # The slice representing test vs train
+    num_train = len(train_seqs)
+    K_slice_norm = K_full_norm[num_train:, :num_train]
+    
+    # 2. Asymmetric approach (compute train states, then asymmetric normalized kernel)
+    _, train_states = mixed_string_kernel(
+        sequences=train_seqs,
+        k_max=2,
+        m=0,
+        weights=weights,
+        n_jobs=1
+    )
+    
+    K_cross = compute_asymmetric_normalized_kernel(
+        test_seqs=test_seqs,
+        train_states=train_states,
+        max_k=2,
+        mismatches=0,
+        mkl_weights=weights,
+        n_jobs=1
+    )
+    
+    assert K_cross.shape == K_slice_norm.shape
+    assert np.allclose(K_cross, K_slice_norm, atol=1e-8)
 
 # --- 4. UNIT TESTS: NORMALIZATION ---
 

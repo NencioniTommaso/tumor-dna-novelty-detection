@@ -1,4 +1,5 @@
 import logging
+from contextlib import contextmanager
 
 import torch
 import numpy as np
@@ -9,12 +10,29 @@ from sklearn.metrics.pairwise import rbf_kernel, linear_kernel
 
 logger = logging.getLogger(__name__)
 
+
+@contextmanager
+def _patched_torch_arange():
+    # Temporary patch to ensure torch.arange respects the active device.
+    original_arange = torch.arange
+
+    def patched_arange(*args, **kwargs):
+        if 'device' not in kwargs:
+            kwargs['device'] = torch.empty(0).device
+        return original_arange(*args, **kwargs)
+
+    torch.arange = patched_arange
+    try:
+        yield
+    finally:
+        torch.arange = original_arange
+
 class DNAFoundationExtractor:
     """
     Extracts deep learning embeddings from DNA sequences using state-of-the-art 
     genomic foundation models. Defaults to DNABERT-2, but supports models like Caduceus.
     """
-    def __init__(self, model_name: str = "zhihan1996/DNABERT-2-117M", device: Optional[str] = None):
+    def __init__(self, model_name: str = "quietflamingo/dnabert2-no-flashattention", device: Optional[str] = None):
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
@@ -30,27 +48,14 @@ class DNAFoundationExtractor:
             config.pad_token_id = self.tokenizer.pad_token_id
 
         # --- THE ULTIMATE HOTFIX ---
-        # DNABERT-2 uses torch.arange, which stubbornly builds on the CPU and ignores 
-        # the meta device. We temporarily patch it to respect the current memory context.
-        original_arange = torch.arange
-        def patched_arange(*args, **kwargs):
-            if 'device' not in kwargs:
-                # Force the device to match whatever PyTorch is currently defaulting to
-                kwargs['device'] = torch.empty(0).device
-            return original_arange(*args, **kwargs)
-        
-        torch.arange = patched_arange
-        
-        try:
-            # Load the model cleanly. The patched arange will prevent the crash!
+        # DNABERT-2 uses torch.arange, which builds on the CPU and ignores the meta device.
+        # Temporarily patch it to respect the current memory context.
+        with _patched_torch_arange():
             self.model = AutoModel.from_pretrained(
-                model_name, 
-                config=config, 
+                model_name,
+                config=config,
                 trust_remote_code=True
             ).to(self.device)
-        finally:
-            # Instantly restore the original PyTorch function so we don't break anything else
-            torch.arange = original_arange  
             
         self.model.eval()
 
@@ -102,7 +107,7 @@ class DNAFoundationExtractor:
 def compute_train_test_kernels(
     train_sequences: List[str], 
     test_sequences: List[str],
-    model_name: str = "zhihan1996/DNABERT-2-117M", 
+    model_name: str = "quietflamingo/dnabert2-no-flashattention", 
     kernel_type: str = "rbf", 
     gamma: Optional[float] = None,
     batch_size: int = 32

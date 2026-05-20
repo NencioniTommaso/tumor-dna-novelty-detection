@@ -17,35 +17,42 @@ sys.path.append(project_root)
 from src.data_utils import load_tracked_patient_cohort
 from src.DNAFeatureExtractor import compute_train_test_kernels
 from src.evaluation import evaluate_novelty_detector, evaluate_patient_level_novelty
-from experiments.experiments_utils import setup_logger, parse_arguments
+from experiments.experiments_utils import (
+    setup_logger,
+    create_base_parser,
+    add_data_dir_arg,
+    add_cache_dir_arg,
+    add_train_sampling_arg,
+    add_test_sampling_args,
+    add_seed_arg,
+    add_nu_arg,
+    build_default_cohorts,
+    validate_files_exist,
+)
 
 logger = setup_logger(__name__)
 
 
 def main():
-    args = parse_arguments(project_root)
+    parser = create_base_parser("Run Sequence Novelty Detection Experiments")
+    add_data_dir_arg(parser, required=True)
+    add_cache_dir_arg(parser, project_root)
+    add_train_sampling_arg(parser)
+    add_test_sampling_args(parser)
+    add_seed_arg(parser)
+    add_nu_arg(parser)
+    args = parser.parse_args()
     
     logger.info("=====================================================")
     logger.info(" COLON CANCER SOMATIC DETECTION: DEEP LEARNING MIL")
     logger.info("=====================================================")
     
     # --- 1. Define the Patient-Level Split ---
-    train_normal_files = [
-        os.path.join(args.data_dir, f"Healthy_{i}_merged_subset_1200000.fa") for i in range(2, 6)
-    ]
-    test_normal_files = [
-        os.path.join(args.data_dir, f"Healthy_{i}_merged_subset_1200000.fa") for i in range(6, 8)
-    ]
-    test_tumor_files = [
-        os.path.join(args.data_dir, f"Colo_{i}_merged_subset_1200000.fa") for i in range(1, 11) if i != 9
-    ]
+    train_normal_files, test_normal_files, test_tumor_files = build_default_cohorts(args.data_dir)
     
     # Verify files exist before running
     all_files = train_normal_files + test_normal_files + test_tumor_files
-    missing_files = [f for f in all_files if not os.path.exists(f)]
-    if missing_files:
-        for f in missing_files:
-            logger.error(f"Cannot find file: {f}")
+    if not validate_files_exist(all_files, logger):
         sys.exit(1)
 
     # --- 2. Load and Sample Tracked Data ---
@@ -54,7 +61,11 @@ def main():
         train_normal_files,
         test_normal_files,
         test_tumor_files,
-        args,
+        args.max_train,
+        args.max_test_normal,
+        args.max_test_tumor,
+        args.seed,
+        args.cache_dir,
         logger
     )
     

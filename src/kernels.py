@@ -3,8 +3,8 @@ kernels.py
 Contains sequence feature extraction, mismatch generation, and Gram matrix computation.
 Optimized for multi-core execution using joblib with a Symmetric Block Strategy.
 
-Upgraded with Combinatorial Expansion for IUPAC ambiguity codes, ensuring accurate
-biological representation without feature space explosion.
+Upgraded with an Expanded Epigenetic Alphabet ('A', 'C', 'G', 'T', 'M', 'H') to capture
+methylation states directly in the feature space as distinct structural variations.
 """
 
 import itertools
@@ -21,15 +21,9 @@ from typing import List, Tuple, Optional
 # Configure the module-level logger
 logger = logging.getLogger(__name__)
 
-# Standard IUPAC ambiguity mapping
-IUPAC_MAP = {
-    'A': ['A'], 'C': ['C'], 'G': ['G'], 'T': ['T'],
-    'M': ['A', 'C'], 'R': ['A', 'G'], 'W': ['A', 'T'],
-    'S': ['C', 'G'], 'Y': ['C', 'T'], 'K': ['G', 'T'],
-    'V': ['A', 'C', 'G'], 'H': ['A', 'C', 'T'], 
-    'D': ['A', 'G', 'T'], 'B': ['C', 'G', 'T'],
-    'N': ['A', 'C', 'G', 'T']
-}
+# Expanded Epigenetic Alphabet
+EPIGENETIC_ALPHABET = ('A', 'C', 'G', 'T', 'M', 'H')
+
 
 def generate_mkl_weights(max_k: int, noise_threshold: int = 2, scaling: str = 'linear') -> list[float]:
     """
@@ -56,30 +50,29 @@ def generate_mkl_weights(max_k: int, noise_threshold: int = 2, scaling: str = 'l
 
     return [round(weight / total, 4) for weight in weights]
 
-@lru_cache(maxsize=100000)
-def resolve_ambiguous_kmer(kmer: str) -> List[str]:
-    """
-    Expands an ambiguous k-mer into all its exact biological possibilities.
-    Example: 'ATM' -> ['ATA', 'ATC']
-    """
-    possible_bases = [IUPAC_MAP.get(char.upper(), ['N']) for char in kmer]
-    return ["".join(combo) for combo in itertools.product(*possible_bases)]
+
+def ensure_mkl_weights(max_k: int, mismatches: int, mkl_weights: Optional[List[float]]) -> List[float]:
+    if mkl_weights is not None:
+        return mkl_weights
+
+    noise_threshold = max(1, 2 * mismatches)
+    return generate_mkl_weights(max_k, noise_threshold=noise_threshold)
+
 
 @lru_cache(maxsize=100000)
-def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: Tuple[str, ...] = ('A', 'C', 'G', 'T')) -> List[str]:
+def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: Tuple[str, ...] = EPIGENETIC_ALPHABET) -> Tuple[str, ...]:
     """
     Generates all k-mers within 'm' mismatches of the given kmer.
-    Upgraded to use itertools for exact mutational combinations and LRU Cache for speed.
-    The alphabet strictly defaults to the 4 standard bases.
+    Uses the 6-letter epigenetic alphabet to generate states.
     """
     if m == 0:
-        return [kmer]
+        return (kmer,)
         
     neighborhood = set([kmer])
     kmer_list = list(kmer)
     indices = list(range(len(kmer)))
     
-    # We loop from 1 mismatch up to 'm' mismatches
+    # Loop from 1 mismatch up to 'm' mismatches
     for num_mismatches in range(1, m + 1):
         for positions in itertools.combinations(indices, num_mismatches):
             for replacement_chars in itertools.product(alphabet, repeat=num_mismatches):
@@ -96,29 +89,25 @@ def generate_mismatch_neighborhood(kmer: str, m: int = 1, alphabet: Tuple[str, .
                     
                     neighborhood.add("".join(mutated_kmer))
                     
-    return list(neighborhood)
+    return tuple(neighborhood)
+
 
 def mismatch_analyzer(sequence: str, k: int, m: int = 1) -> List[str]:
     """
-    Custom analyzer for CountVectorizer to expand sequences:
-    1. Extracts raw k-mers.
-    2. Resolves biological ambiguities (e.g., M, R, Y) into standard bases.
-    3. Generates the mismatch neighborhood using standard bases.
+    Custom analyzer for CountVectorizer.
+    Extracts raw k-mers and generates the mismatch neighborhood using the epigenetic alphabet.
     """
     raw_kmers = [sequence[i:i+k] for i in range(len(sequence)-k+1)]
     
     expanded_kmers = []
     for raw_kmer in raw_kmers:
-        # Step 1: Resolve IUPAC ambiguities first
-        resolved_exact_kmers = resolve_ambiguous_kmer(raw_kmer)
-        
-        # Step 2: Apply mismatch generation ONLY to standard A,C,G,T strings
-        for exact_kmer in resolved_exact_kmers:
-            expanded_kmers.extend(generate_mismatch_neighborhood(exact_kmer, m=m, alphabet=('A', 'C', 'G', 'T')))
+        # Directly map to mismatch neighborhood (no IUPAC resolution needed)
+        expanded_kmers.extend(generate_mismatch_neighborhood(raw_kmer, m=m, alphabet=EPIGENETIC_ALPHABET))
             
     return expanded_kmers
 
-def extract_features(sequences: List[str], k: int, m: int = 0, vocabulary: Optional[dict] = None) -> sp.csr_matrix:
+
+def extract_features(sequences: List[str], k: int, m: int = 0, vocabulary: Optional[dict] = None) -> Tuple[sp.csr_matrix, dict]:
     """
     Extracts sequence features. 
     Accepts an optional fixed vocabulary to allow for stateless, chunked parallelization.
@@ -129,11 +118,12 @@ def extract_features(sequences: List[str], k: int, m: int = 0, vocabulary: Optio
         vocabulary=vocabulary  # Inject fixed vocabulary
     )
     
-    # If vocab is fixed, we only need to transform (skips fitting overhead)
     if vocabulary is not None:
-        return vectorizer.transform(sequences)
+        return vectorizer.transform(sequences), vocabulary
         
-    return vectorizer.fit_transform(sequences)
+    X = vectorizer.fit_transform(sequences)
+    return X, vectorizer.vocabulary_
+
 
 def _compute_gram_block_pair(X_csr: sp.csr_matrix, r_start: int, r_end: int, c_start: int, c_end: int):
     """
@@ -142,6 +132,7 @@ def _compute_gram_block_pair(X_csr: sp.csr_matrix, r_start: int, r_end: int, c_s
     block_val = X_csr[r_start:r_end].dot(X_csr[c_start:c_end].T).toarray()
     return r_start, r_end, c_start, c_end, block_val
 
+
 def _extract_and_compute_gram_k_symmetric(
     sequences: List[str], 
     k: int, 
@@ -149,50 +140,52 @@ def _extract_and_compute_gram_k_symmetric(
     weight: float,
     n_inner_jobs: int = -1,
     block_size: int = 1500
-) -> np.ndarray:
+) -> Tuple[np.ndarray, dict]:
     
     if weight == 0.0:
-        return np.zeros((len(sequences), len(sequences)), dtype=np.float64)
+        return np.zeros((len(sequences), len(sequences)), dtype=np.float64), {}
 
-    # 1. Extract and scale features
     logger.debug(f"Extracting features for k={k}, m={m} (weight={weight})...")
-    X_k = extract_features(sequences, k, m)
+    X_k, vocab = extract_features(sequences, k, m)
     X_k = X_k.multiply(np.sqrt(weight))
     
+    diag_train = np.array(X_k.multiply(X_k).sum(axis=1)).flatten()
+    train_state = {
+        'k': k,
+        'vocabulary': vocab,
+        'X_train': X_k,
+        'diag_train': diag_train
+    }
+
     N = X_k.shape[0]
     K = np.zeros((N, N), dtype=np.float64)
     
-    # Fast path for small datasets
     if N <= block_size:
         logger.debug(f"Computing exact Gram matrix directly for N={N} (k={k})")
         K_full = X_k.dot(X_k.T).toarray()
-        return K_full
+        return K_full, train_state
     
-    # 2. Define block ranges
     ranges = [(i, min(i + block_size, N)) for i in range(0, N, block_size)]
     
-    # 3. Create tasks ONLY for the upper triangle of blocks (I <= J)
     tasks = []
     for i, (r_start, r_end) in enumerate(ranges):
         for j, (c_start, c_end) in enumerate(ranges):
-            if j >= i: # Upper triangle of blocks
+            if j >= i: 
                 tasks.append((r_start, r_end, c_start, c_end))
                 
-    # 4. Execute block-pair multiplications in parallel
     logger.debug(f"Executing {len(tasks)} block-pair multiplications for k={k} using {n_inner_jobs} threads...")
     results = Parallel(n_jobs=n_inner_jobs, prefer="threads")(
         delayed(_compute_gram_block_pair)(X_k, rs, re, cs, ce)
         for rs, re, cs, ce in tasks
     )
     
-    # 5. Reassemble the symmetric matrix
     for rs, re, cs, ce, block_val in results:
         K[rs:re, cs:ce] = block_val
-        # Mirror to the lower triangle if it's an off-diagonal block
         if rs != cs:
             K[cs:ce, rs:re] = block_val.T
             
-    return K
+    return K, train_state
+
 
 def mixed_string_kernel(
     sequences: List[str], 
@@ -200,7 +193,7 @@ def mixed_string_kernel(
     m: int = 0, 
     weights: Optional[List[float]] = None,
     n_jobs: int = -1
-) -> Tuple[np.ndarray, Optional[sp.csr_matrix]]:
+) -> Tuple[np.ndarray, dict]:
     
     if weights is None:
         weights = [1.0] * k_max
@@ -210,9 +203,8 @@ def mixed_string_kernel(
     
     total_cores = os.cpu_count() if n_jobs == -1 else n_jobs
     
-    # Heuristic: assign more inner cores to larger k-values (they cost more)
     large_ks = [k for k in active_ks if k > 3]
-    n_outer = max(1, len(large_ks))     # how many large-k jobs run "concurrently"
+    n_outer = max(1, len(large_ks))
     inner_cores = max(1, total_cores // n_outer)
 
     logger.info(f"Computing Mixed String Kernel for {len(sequences)} sequences...")
@@ -221,7 +213,7 @@ def mixed_string_kernel(
     def _jobs_for_k(k):
         return inner_cores if k > 3 else 1
 
-    sub_grams = Parallel(n_jobs=n_jobs)(
+    per_k_results = Parallel(n_jobs=n_jobs)(
         delayed(_extract_and_compute_gram_k_symmetric)(
             sequences, k, m, weights[k-1], 
             n_inner_jobs=_jobs_for_k(k)
@@ -230,7 +222,11 @@ def mixed_string_kernel(
     )
 
     logger.info("Fusing sub-grams into final kernel...")
-    return sum(sub_grams), None
+    sub_grams = [res[0] for res in per_k_results]
+    train_states = {res[1]['k']: res[1] for res in per_k_results if res[1]}
+    
+    return sum(sub_grams), train_states
+
 
 def normalize_gram(K: np.ndarray) -> np.ndarray:
     """
@@ -244,7 +240,9 @@ def normalize_gram(K: np.ndarray) -> np.ndarray:
     return K * inv_sqrt_diag[:, None] * inv_sqrt_diag[None, :]
 
 
+# ====================================================================
 # PART FOR CALIBRATION AND INFERENCE
+# ====================================================================
 
 def _compute_asymmetric_block_pair(X_test: sp.csr_matrix, X_train: sp.csr_matrix, r_start: int, r_end: int, c_start: int, c_end: int):
     """
@@ -257,77 +255,77 @@ def _compute_asymmetric_block_pair(X_test: sp.csr_matrix, X_train: sp.csr_matrix
 
 def _extract_and_compute_asymmetric_k(
     test_seqs: List[str], 
-    train_seqs: List[str], 
+    train_state_k: dict, 
     k: int, 
     m: int, 
     weight: float, 
     n_inner_jobs: int = -1, 
     block_size: int = 1500
 ):
-    """
-    Module-level worker function to compute the cross-block and diagonals for a single k-mer.
-    Because it is at the module level, joblib will not suffer from closure serialization overhead.
-    """
     num_test = len(test_seqs)
-    num_train = len(train_seqs)
-
-    if weight == 0.0:
+    
+    if weight == 0.0 or train_state_k is None:
+        num_train = train_state_k['X_train'].shape[0] if train_state_k else 0
         return (np.zeros((num_test, num_train), dtype=np.float64), 
                 np.zeros(num_test, dtype=np.float64), 
-                np.zeros(num_train, dtype=np.float64))
+                np.zeros(num_train, dtype=np.float64) if num_train > 0 else None)
 
-    # 1. Extract combined features to ensure vocabulary alignment
+    X_train = train_state_k['X_train']
+    vocab = train_state_k['vocabulary']
+    diag_train_part = train_state_k['diag_train']
+    num_train = X_train.shape[0]
+
     logger.debug(f"Extracting asymmetric features for k={k}, m={m} (weight={weight})...")
-    X_combined = extract_features(test_seqs + train_seqs, k=k, m=m)
-    X_combined = X_combined.multiply(np.sqrt(weight))
+    
+    # 1. Compute Test Self-Norm exactly using its own vocabulary
+    X_test_self, _ = extract_features(test_seqs, k=k, m=m)
+    X_test_self = X_test_self.multiply(np.sqrt(weight))
+    diag_test_part = np.array(X_test_self.multiply(X_test_self).sum(axis=1)).flatten()
 
-    # 2. Slice the sparse matrices cleanly
-    X_test = X_combined[:num_test, :]
-    X_train = X_combined[num_test:, :]
+    # 2. Compute Cross-Terms using Train Vocabulary
+    X_test_cross, _ = extract_features(test_seqs, k=k, m=m, vocabulary=vocab)
+    X_test_cross = X_test_cross.multiply(np.sqrt(weight))
 
     K_part = np.zeros((num_test, num_train), dtype=np.float64)
 
-    # Fast path for small data
     if num_test * num_train <= block_size * block_size:
-        K_part = X_test.dot(X_train.T).toarray()
+        K_part = X_test_cross.dot(X_train.T).toarray()
     else:
-        # Define independent block ranges
         test_ranges = [(i, min(i + block_size, num_test)) for i in range(0, num_test, block_size)]
         train_ranges = [(i, min(i + block_size, num_train)) for i in range(0, num_train, block_size)]
 
         tasks = [(rs, re, cs, ce) for rs, re in test_ranges for cs, ce in train_ranges]
 
-        # Execute block-pairs using inner threads
         results_blocks = Parallel(n_jobs=n_inner_jobs, prefer="threads")(
-            delayed(_compute_asymmetric_block_pair)(X_test, X_train, rs, re, cs, ce) 
+            delayed(_compute_asymmetric_block_pair)(X_test_cross, X_train, rs, re, cs, ce) 
             for rs, re, cs, ce in tasks
         )
 
-        # Assemble the partial asymmetric matrix
         for rs, re, cs, ce, block_val in results_blocks:
             K_part[rs:re, cs:ce] = block_val
-
-    # 3. Compute diagonals rapidly using sparse row sums
-    diag_test_part = np.array(X_test.multiply(X_test).sum(axis=1)).flatten()
-    diag_train_part = np.array(X_train.multiply(X_train).sum(axis=1)).flatten()
 
     return K_part, diag_test_part, diag_train_part
 
 
 def compute_asymmetric_normalized_kernel(
     test_seqs: List[str],
-    train_seqs: List[str],
+    train_states: dict,
     max_k: int,
     mismatches: int,
     mkl_weights: List[float],
     n_jobs: int = -1,
 ) -> np.ndarray:
-    """
-    Computes ONLY the Test vs Train block of the Gram matrix and normalizes it.
-    Uses Hierarchical Parallelization identical to the training kernel.
-    """
+    
     num_test = len(test_seqs)
-    num_train = len(train_seqs)
+    # Determine num_train from any valid train_state
+    num_train = 0
+    for k_val, state in train_states.items():
+        if state is not None:
+            num_train = state['X_train'].shape[0]
+            break
+            
+    if num_train == 0:
+        raise ValueError("Invalid train_states dictionary provided.")
     
     K_cross = np.zeros((num_test, num_train), dtype=np.float64)
     diag_test = np.zeros(num_test, dtype=np.float64)
@@ -336,7 +334,7 @@ def compute_asymmetric_normalized_kernel(
     active_ks = [k for k in range(1, max_k + 1) if mkl_weights[k - 1] != 0.0]
 
     if not active_ks:
-        return K_cross # Failsafe
+        return K_cross 
 
     total_cores = os.cpu_count() if n_jobs == -1 else n_jobs
     large_ks = [k for k in active_ks if k > 3]
@@ -348,22 +346,19 @@ def compute_asymmetric_normalized_kernel(
     def _jobs_for_k(k):
         return inner_cores if k > 3 else 1
 
-    # Outer parallelism maps across active k-mers
     per_k_results = Parallel(n_jobs=n_jobs)(
         delayed(_extract_and_compute_asymmetric_k)(
-            test_seqs, train_seqs, k, mismatches, mkl_weights[k-1], _jobs_for_k(k)
+            test_seqs, train_states.get(k), k, mismatches, mkl_weights[k-1], _jobs_for_k(k)
         )
         for k in active_ks
     )
 
-    # Accumulate results
     logger.info("Fusing asymmetric sub-grams and normalizing...")
     for K_part, dt_part, dtr_part in per_k_results:
         K_cross += K_part
         diag_test += dt_part
         diag_train += dtr_part
 
-    # Apply SVDD Normalization Formula
     diag_test_safe = np.maximum(diag_test, 1e-12)
     diag_train_safe = np.maximum(diag_train, 1e-12)
 

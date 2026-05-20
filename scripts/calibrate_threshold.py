@@ -7,6 +7,7 @@ Updates the model artifact with this threshold.
 
 import os
 import sys
+import time
 import joblib
 import numpy as np
 from sklearn.metrics import roc_curve, roc_auc_score
@@ -16,42 +17,58 @@ project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 
 from src.data_utils import load_tracked_patient_cohort
-from src.kernels import compute_asymmetric_normalized_kernel, generate_mkl_weights
+from src.kernels import compute_asymmetric_normalized_kernel, ensure_mkl_weights
+from src.evaluation import compute_patient_score
 from src.model_io import load_svm_model
-from experiments.experiments_utils import setup_logger, parse_arguments
+from experiments.experiments_utils import (
+    setup_logger,
+    create_base_parser,
+    add_data_dir_arg,
+    add_cache_dir_arg,
+    add_test_sampling_args,
+    add_seed_arg,
+    add_model_path_arg,
+    build_validation_files,
+)
 
 logger = setup_logger(__name__)
 
 def main():
-    args = parse_arguments(project_root)
-    model_path = os.path.join(project_root, "models", "ocsvm_pretrained.pkl")
+    parser = create_base_parser("Calibrate a pretrained model and update decision threshold.")
+    add_data_dir_arg(parser, required=True)
+    add_cache_dir_arg(parser, project_root)
+    add_test_sampling_args(parser)
+    add_seed_arg(parser)
+    add_model_path_arg(parser, project_root)
+    args = parser.parse_args()
+    model_path = args.model_path
     
     logger.info("=====================================================")
     logger.info(" PHASE 2: MODEL CALIBRATION & THRESHOLD TUNING")
     logger.info("=====================================================")
 
+    start_time = time.perf_counter()
+
     # 1. Load the Pretrained Model
-    svm, train_sequences, max_k, mismatches, mkl_weights, _ = load_svm_model(model_path, logger)
+    svm, train_sequences, max_k, mismatches, mkl_weights, _, train_states = load_svm_model(model_path)
     
-    if mkl_weights is None:
-        mkl_weights = generate_mkl_weights(max_k, noise_threshold=max(1, 2 * mismatches))
+    mkl_weights = ensure_mkl_weights(max_k, mismatches, mkl_weights)
 
     # 2. Define the Validation Cohort (Must include BOTH Healthy and Tumor)
     # Ensure these are different from the ones used in train_and_save_svm.py!
-    val_normal_files = [os.path.join(args.data_dir, f"Healthy_{i}_merged_subset_1200000.fa") for i in range(6, 8)]
-    val_tumor_files = [os.path.join(args.data_dir, f"Colo_{i}_merged_subset_1200000.fa") for i in range(1, 11) if i != 9]
+    val_normal_files, val_tumor_files = build_validation_files(args.data_dir)
     
     logger.info("Loading validation cohort...")
     # Notice we pass empty brackets for the training files, because we already have train_sequences!
     _, val_data, _, val_files_info = load_tracked_patient_cohort(
-        [], val_normal_files, val_tumor_files, args, logger
+        [], val_normal_files, val_tumor_files, 0, args.max_test_normal, args.max_test_tumor, args.seed, args.cache_dir, logger
     )
     
     # 3. Compute Inference Kernel for the Validation Set
     logger.info(f"Computing asymmetric kernel for {len(val_data)} validation sequences...")
     K_val = compute_asymmetric_normalized_kernel(
         test_seqs=val_data,
-        train_seqs=train_sequences,
+        train_states=train_states,
         max_k=max_k,
         mismatches=mismatches,
         mkl_weights=mkl_weights
@@ -71,9 +88,7 @@ def main():
         seq_scores = anomaly_scores[current_idx : current_idx + num_seqs]
         current_idx += num_seqs
         
-        inverted_scores = -seq_scores
-        top_k = max(1, int(num_seqs * 0.05)) 
-        patient_score = float(np.mean(np.sort(inverted_scores)[-top_k:]))
+        patient_score = compute_patient_score(seq_scores)
         
         patient_y_true.append(info['label'])
         patient_scores.append(patient_score)
@@ -102,6 +117,9 @@ def main():
     joblib.dump(saved_state, model_path)
     
     logger.info("Calibration complete. Pipeline is ready for production inference.")
+
+    elapsed = time.perf_counter() - start_time
+    logger.info(f"Calibration time: {elapsed:.2f} seconds")
 
 if __name__ == "__main__":
     main()

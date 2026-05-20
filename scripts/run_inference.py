@@ -4,7 +4,6 @@ Loads a pre-trained Patient-Level MIL model and efficiently calculates
 only the asymmetric inference kernel for new patients, avoiding memory bloat.
 """
 
-import argparse
 import os
 import sys
 import time
@@ -15,34 +14,36 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 
-from experiments.experiments_utils import setup_logger
+from experiments.experiments_utils import (
+    setup_logger,
+    create_base_parser,
+    add_patient_file_arg,
+    add_model_path_arg,
+    add_sample_size_arg,
+    add_cache_dir_arg,
+)
 from src.data_utils import MMapFastaReader
-from src.kernels import compute_asymmetric_normalized_kernel, generate_mkl_weights
+from src.kernels import compute_asymmetric_normalized_kernel, ensure_mkl_weights
+from src.evaluation import compute_patient_score
 from src.model_io import load_svm_model
 
 logger = setup_logger(__name__)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run inference using a saved OC-SVM model.")
-    parser.add_argument("--patient-file", required=True, help="Path to the patient's FASTA file.")
-    parser.add_argument(
-        "--model-path",
-        default=os.path.join(project_root, "models", "ocsvm_pretrained.pkl"),
-        help="Path to the saved .pkl model.",
-    )
-    parser.add_argument("--sample-size", type=int, default=1500, help="Number of sequences to sample from the patient.")
-    parser.add_argument(
-        "--cache-dir",
-        default=os.path.join(project_root, "data", ".fai_cache"),
-        help="Path for the fasta index cache.",
-    )
+    parser = create_base_parser("Run inference using a saved OC-SVM model.")
+    add_patient_file_arg(parser)
+    add_model_path_arg(parser, project_root)
+    add_sample_size_arg(parser)
+    add_cache_dir_arg(parser, project_root)
 
     args = parser.parse_args()
 
     start_time = time.perf_counter()
 
-    svm, train_sequences, max_k, mismatches, mkl_weights = load_svm_model(args.model_path, logger)
+    svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold, train_states = load_svm_model(
+        args.model_path
+    )
     logger.info(f"Loaded SVM trained on {len(train_sequences)} sequences.")
 
     logger.info(f"Loading patient data from {os.path.basename(args.patient_file)}...")
@@ -59,11 +60,11 @@ def main():
     # Backward compatibility for models saved before MKL weights were serialized.
     if mkl_weights is None:
         logger.info("No saved MKL weights found in model artifact; recomputing for compatibility.")
-        mkl_weights = generate_mkl_weights(max_k, noise_threshold=max(1, 2 * mismatches))
+    mkl_weights = ensure_mkl_weights(max_k, mismatches, mkl_weights)
 
     K_test = compute_asymmetric_normalized_kernel(
         test_seqs=new_patient_sequences,
-        train_seqs=train_sequences,
+        train_states=train_states,
         max_k=max_k,
         mismatches=mismatches,
         mkl_weights=mkl_weights,
@@ -72,9 +73,7 @@ def main():
     logger.info("Predicting sequence anomalies...")
     anomaly_scores = svm.decision_function(K_test)
 
-    inverted_scores = -anomaly_scores
-    top_k = max(1, int(len(new_patient_sequences) * 0.05))
-    patient_score = float(np.mean(np.sort(inverted_scores)[-top_k:]))
+    patient_score = compute_patient_score(anomaly_scores)
 
     elapsed = time.perf_counter() - start_time
     logger.info(f"Inference time: {elapsed:.2f} seconds")
@@ -84,13 +83,11 @@ def main():
     logger.info(f" FINAL ANOMALY SCORE: {patient_score:.4f}")
     logger.info("=====================================================\n")
 
-    if 'optimal_threshold' not in saved_state:
+    if optimal_threshold is None:
         logger.warning("Model has not been calibrated! Run calibrate_threshold.py first.")
         logger.warning("Cannot provide a definitive Tumor/Healthy diagnosis.")
     else:
-        clinical_threshold = saved_state['optimal_threshold']
-        
-        if patient_score >= clinical_threshold:
+        if patient_score >= optimal_threshold:
             diagnosis = "🚨 TUMOR DETECTED"
         else:
             diagnosis = "✅ HEALTHY"
