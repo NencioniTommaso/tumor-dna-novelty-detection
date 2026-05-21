@@ -125,6 +125,113 @@ def extract_features(sequences: List[str], k: int, m: int = 0, vocabulary: Optio
     return X, vectorizer.vocabulary_
 
 
+@lru_cache(maxsize=100000)
+def generate_weighted_mismatch_neighborhood(
+    kmer: str, m: int = 1, alphabet: Tuple[str, ...] = EPIGENETIC_ALPHABET
+) -> Tuple[Tuple[str, int], ...]:
+    """
+    Like generate_mismatch_neighborhood, but returns (neighbor, hamming_distance) tuples.
+    The hamming distance is the minimum number of substitutions from the original kmer.
+    """
+    if m == 0:
+        return ((kmer, 0),)
+
+    # Dict mapping neighbor -> minimum Hamming distance from original
+    neighbors = {kmer: 0}
+    kmer_list = list(kmer)
+    indices = list(range(len(kmer)))
+
+    for num_mismatches in range(1, m + 1):
+        for positions in itertools.combinations(indices, num_mismatches):
+            for replacement_chars in itertools.product(alphabet, repeat=num_mismatches):
+                is_true_mismatch = True
+                for pos, char in zip(positions, replacement_chars):
+                    if kmer_list[pos] == char:
+                        is_true_mismatch = False
+                        break
+
+                if is_true_mismatch:
+                    mutated = kmer_list.copy()
+                    for pos, char in zip(positions, replacement_chars):
+                        mutated[pos] = char
+                    neighbor = "".join(mutated)
+                    # Keep the minimum distance if reachable via multiple paths
+                    if neighbor not in neighbors or num_mismatches < neighbors[neighbor]:
+                        neighbors[neighbor] = num_mismatches
+
+    return tuple(neighbors.items())
+
+
+def extract_features_weighted(
+    sequences: List[str],
+    k: int,
+    m: int = 0,
+    mismatch_decay: float = 0.5,
+    vocabulary: Optional[dict] = None,
+) -> Tuple[sp.csr_matrix, dict]:
+    """
+    Extracts weighted mismatch features. For each observed k-mer, its neighbors
+    at Hamming distance d contribute weight = mismatch_decay^d.
+
+    - mismatch_decay=1.0 is equivalent to extract_features (standard mismatch kernel).
+    - mismatch_decay=0.0 counts only exact matches (equivalent to m=0).
+    - Typical values: 0.3–0.7 to penalize inexact matches.
+
+    Returns the same types as extract_features (csr_matrix, vocab dict), so it
+    is a drop-in replacement compatible with the MKL and normalization pipeline.
+    """
+    # Fast path: if decay is 1.0 or no mismatches, delegate to standard extraction
+    if m == 0 or mismatch_decay == 1.0:
+        return extract_features(sequences, k, m, vocabulary)
+
+    build_vocab = vocabulary is None
+    if build_vocab:
+        vocab: dict = {}
+    else:
+        vocab = vocabulary
+
+    rows: list[int] = []
+    cols: list[int] = []
+    vals: list[float] = []
+
+    for seq_idx, sequence in enumerate(sequences):
+        raw_kmers = [sequence[i : i + k] for i in range(len(sequence) - k + 1)]
+
+        # Accumulate weighted contributions per feature column for this sequence
+        feature_weights: dict[int, float] = {}
+
+        for raw_kmer in raw_kmers:
+            neighbors = generate_weighted_mismatch_neighborhood(
+                raw_kmer, m=m, alphabet=EPIGENETIC_ALPHABET
+            )
+            for neighbor, dist in neighbors:
+                # Look up or assign a column index
+                if build_vocab:
+                    if neighbor not in vocab:
+                        vocab[neighbor] = len(vocab)
+                    col_idx = vocab[neighbor]
+                elif neighbor in vocab:
+                    col_idx = vocab[neighbor]
+                else:
+                    continue  # skip k-mers absent from the fixed vocabulary
+
+                weight = mismatch_decay ** dist  # 1.0 for exact, λ^d for mismatch
+                feature_weights[col_idx] = feature_weights.get(col_idx, 0.0) + weight
+
+        for col_idx, w in feature_weights.items():
+            rows.append(seq_idx)
+            cols.append(col_idx)
+            vals.append(w)
+
+    n_features = len(vocab)
+    X = sp.csr_matrix(
+        (np.array(vals, dtype=np.float64), (np.array(rows), np.array(cols))),
+        shape=(len(sequences), n_features),
+    )
+
+    return X, vocab
+
+
 def _compute_gram_block_pair(X_csr: sp.csr_matrix, r_start: int, r_end: int, c_start: int, c_end: int):
     """
     Computes a rectangular block intersection of the Gram matrix: K[r_start:r_end, c_start:c_end]
@@ -146,7 +253,7 @@ def _extract_and_compute_gram_k_symmetric(
         return np.zeros((len(sequences), len(sequences)), dtype=np.float64), {}
 
     logger.debug(f"Extracting features for k={k}, m={m} (weight={weight})...")
-    X_k, vocab = extract_features(sequences, k, m)
+    X_k, vocab = extract_features_weighted(sequences, k, m, mismatch_decay=0.5)
     X_k = X_k.multiply(np.sqrt(weight))
     
     diag_train = np.array(X_k.multiply(X_k).sum(axis=1)).flatten()
@@ -278,12 +385,13 @@ def _extract_and_compute_asymmetric_k(
     logger.debug(f"Extracting asymmetric features for k={k}, m={m} (weight={weight})...")
     
     # 1. Compute Test Self-Norm exactly using its own vocabulary
-    X_test_self, _ = extract_features(test_seqs, k=k, m=m)
+    X_test_self, _ = extract_features_weighted(test_seqs, k, m, mismatch_decay=0.5)
+
     X_test_self = X_test_self.multiply(np.sqrt(weight))
     diag_test_part = np.array(X_test_self.multiply(X_test_self).sum(axis=1)).flatten()
 
     # 2. Compute Cross-Terms using Train Vocabulary
-    X_test_cross, _ = extract_features(test_seqs, k=k, m=m, vocabulary=vocab)
+    X_test_cross, _ = extract_features_weighted(test_seqs, k=k, m=m, mismatch_decay=0.5, vocabulary=vocab)
     X_test_cross = X_test_cross.multiply(np.sqrt(weight))
 
     K_part = np.zeros((num_test, num_train), dtype=np.float64)

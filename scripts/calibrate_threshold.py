@@ -10,7 +10,7 @@ import sys
 import time
 import joblib
 import numpy as np
-from sklearn.metrics import roc_curve, roc_auc_score
+from sklearn.metrics import roc_curve, roc_auc_score, classification_report
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
@@ -96,18 +96,53 @@ def main():
         status = "TUMOR" if info['label'] == -1 else "HEALTHY"
         logger.info(f"[{status}] {info['filename']} -> Score: {patient_score:.4f}")
 
-    # 6. Calculate Youden's J Statistic
+    # 6. Calculate Youden's J Statistic using Stratified Bootstrap
     true_binary = (np.array(patient_y_true) == -1).astype(int) 
-    fpr, tpr, thresholds = roc_curve(true_binary, patient_scores)
-    youden_j = tpr - fpr 
+    patient_scores_arr = np.array(patient_scores)
     
-    best_idx = np.argmax(youden_j)
-    optimal_threshold = thresholds[best_idx]
-    val_auc = roc_auc_score(true_binary, patient_scores)
+    # Separate indices by class for stratified resampling
+    idx_healthy = np.where(true_binary == 0)[0]
+    idx_tumor = np.where(true_binary == 1)[0]
+    
+    if len(idx_healthy) == 0 or len(idx_tumor) == 0:
+        raise ValueError(
+            f"Calibration requires both healthy and tumor patients in the validation set. "
+            f"Got {len(idx_healthy)} healthy, {len(idx_tumor)} tumor."
+        )
+    
+    rng = np.random.default_rng(args.seed)
+    collected_thresholds = []
+    N = 1000
+    for _ in range(N):
+        # Stratified bootstrap: resample within each class independently
+        boot_healthy = rng.choice(idx_healthy, size=len(idx_healthy), replace=True)
+        boot_tumor = rng.choice(idx_tumor, size=len(idx_tumor), replace=True)
+        boot_idx = np.concatenate([boot_healthy, boot_tumor])
+        
+        resampled_binary = true_binary[boot_idx]
+        resampled_scores = patient_scores_arr[boot_idx]
+        
+        fpr, tpr, thresholds = roc_curve(resampled_binary, resampled_scores)
+        youden_j = tpr - fpr 
+        best_idx = np.argmax(youden_j)
+        collected_thresholds.append(thresholds[best_idx])
+    
+    collected_thresholds = np.array(collected_thresholds)
+    optimal_threshold = np.median(collected_thresholds)
+    
+    ci_lower = np.percentile(collected_thresholds, 2.5)
+    ci_upper = np.percentile(collected_thresholds, 97.5)
+    
+    val_auc = roc_auc_score(true_binary, patient_scores_arr)
+    
+    preds = (patient_scores_arr >= optimal_threshold).astype(int)
+    report = classification_report(true_binary, preds, target_names=["Healthy", "Tumor"])
+    logger.info("\n--- Validation Classification Report ---")
+    logger.info("\n" + report)
     
     logger.info("\n=====================================================")
     logger.info(f" VALIDATION ROC-AUC  : {val_auc:.4f}")
-    logger.info(f" OPTIMAL THRESHOLD   : {optimal_threshold:.4f}")
+    logger.info(f" OPTIMAL THRESHOLD   : {optimal_threshold:.4f} (95% CI: [{ci_lower:.4f}, {ci_upper:.4f}])")
     logger.info("=====================================================\n")
     
     # 7. Update and Save the Model Artifact
