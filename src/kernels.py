@@ -167,12 +167,62 @@ def generate_weighted_mismatch_neighborhood(
     return tuple(neighbors.items())
 
 
+def _build_full_vocabulary(k: int, alphabet: Tuple[str, ...] = EPIGENETIC_ALPHABET) -> dict:
+    """
+    Pre-enumerates all possible k-mers of length k from the given alphabet.
+    Returns a deterministic vocabulary mapping each k-mer to a unique column index.
+    This allows fully independent parallel feature extraction with no shared mutable state.
+    """
+    return {"".join(kmer): idx for idx, kmer in enumerate(itertools.product(alphabet, repeat=k))}
+
+
+def _extract_chunk_weighted(
+    chunk: List[str],
+    chunk_offset: int,
+    k: int,
+    m: int,
+    mismatch_decay: float,
+    vocab: dict,
+) -> Tuple[list, list, list]:
+    """
+    Processes a chunk of sequences with a fixed vocabulary.
+    Each chunk is fully independent — no shared mutable state.
+    Returns COO-format lists (rows, cols, vals) for sparse matrix assembly.
+    """
+    rows: list[int] = []
+    cols: list[int] = []
+    vals: list[float] = []
+
+    for local_idx, sequence in enumerate(chunk):
+        raw_kmers = [sequence[i : i + k] for i in range(len(sequence) - k + 1)]
+
+        feature_weights: dict[int, float] = {}
+
+        for raw_kmer in raw_kmers:
+            neighbors = generate_weighted_mismatch_neighborhood(
+                raw_kmer, m=m, alphabet=EPIGENETIC_ALPHABET
+            )
+            for neighbor, dist in neighbors:
+                if neighbor in vocab:
+                    col_idx = vocab[neighbor]
+                    weight = mismatch_decay ** dist
+                    feature_weights[col_idx] = feature_weights.get(col_idx, 0.0) + weight
+
+        for col_idx, w in feature_weights.items():
+            rows.append(chunk_offset + local_idx)
+            cols.append(col_idx)
+            vals.append(w)
+
+    return rows, cols, vals
+
+
 def extract_features_weighted(
     sequences: List[str],
     k: int,
     m: int = 0,
     mismatch_decay: float = 0.5,
     vocabulary: Optional[dict] = None,
+    n_jobs: int = 1,
 ) -> Tuple[sp.csr_matrix, dict]:
     """
     Extracts weighted mismatch features. For each observed k-mer, its neighbors
@@ -182,6 +232,10 @@ def extract_features_weighted(
     - mismatch_decay=0.0 counts only exact matches (equivalent to m=0).
     - Typical values: 0.3–0.7 to penalize inexact matches.
 
+    Uses parallel chunking with a pre-enumerated vocabulary for multi-core execution.
+    When vocabulary is None (training), the full alphabet vocabulary is pre-built.
+    When vocabulary is provided (inference), it is used directly.
+
     Returns the same types as extract_features (csr_matrix, vocab dict), so it
     is a drop-in replacement compatible with the MKL and normalization pipeline.
     """
@@ -189,49 +243,45 @@ def extract_features_weighted(
     if m == 0 or mismatch_decay == 1.0:
         return extract_features(sequences, k, m, vocabulary)
 
-    build_vocab = vocabulary is None
-    if build_vocab:
-        vocab: dict = {}
-    else:
+    # Use provided vocabulary or pre-enumerate all possible k-mers
+    if vocabulary is not None:
         vocab = vocabulary
+    else:
+        vocab = _build_full_vocabulary(k)
 
-    rows: list[int] = []
-    cols: list[int] = []
-    vals: list[float] = []
+    n_seqs = len(sequences)
+    effective_jobs = min(n_jobs if n_jobs > 0 else (os.cpu_count() or 1), n_seqs)
 
-    for seq_idx, sequence in enumerate(sequences):
-        raw_kmers = [sequence[i : i + k] for i in range(len(sequence) - k + 1)]
+    if effective_jobs <= 1:
+        # Single-threaded fast path — avoid joblib overhead
+        all_rows, all_cols, all_vals = _extract_chunk_weighted(
+            sequences, 0, k, m, mismatch_decay, vocab
+        )
+    else:
+        # Split sequences into chunks for parallel processing
+        chunk_boundaries = np.array_split(range(n_seqs), effective_jobs)
+        chunks = [(sequences[idx[0]:idx[-1]+1], idx[0]) for idx in chunk_boundaries if len(idx) > 0]
 
-        # Accumulate weighted contributions per feature column for this sequence
-        feature_weights: dict[int, float] = {}
+        logger.debug(f"Parallel feature extraction: k={k}, {len(chunks)} chunks across {effective_jobs} workers")
 
-        for raw_kmer in raw_kmers:
-            neighbors = generate_weighted_mismatch_neighborhood(
-                raw_kmer, m=m, alphabet=EPIGENETIC_ALPHABET
-            )
-            for neighbor, dist in neighbors:
-                # Look up or assign a column index
-                if build_vocab:
-                    if neighbor not in vocab:
-                        vocab[neighbor] = len(vocab)
-                    col_idx = vocab[neighbor]
-                elif neighbor in vocab:
-                    col_idx = vocab[neighbor]
-                else:
-                    continue  # skip k-mers absent from the fixed vocabulary
+        results = Parallel(n_jobs=effective_jobs)(
+            delayed(_extract_chunk_weighted)(chunk, offset, k, m, mismatch_decay, vocab)
+            for chunk, offset in chunks
+        )
 
-                weight = mismatch_decay ** dist  # 1.0 for exact, λ^d for mismatch
-                feature_weights[col_idx] = feature_weights.get(col_idx, 0.0) + weight
-
-        for col_idx, w in feature_weights.items():
-            rows.append(seq_idx)
-            cols.append(col_idx)
-            vals.append(w)
+        # Merge COO data from all chunks
+        all_rows: list[int] = []
+        all_cols: list[int] = []
+        all_vals: list[float] = []
+        for chunk_rows, chunk_cols, chunk_vals in results:
+            all_rows.extend(chunk_rows)
+            all_cols.extend(chunk_cols)
+            all_vals.extend(chunk_vals)
 
     n_features = len(vocab)
     X = sp.csr_matrix(
-        (np.array(vals, dtype=np.float64), (np.array(rows), np.array(cols))),
-        shape=(len(sequences), n_features),
+        (np.array(all_vals, dtype=np.float64), (np.array(all_rows), np.array(all_cols))),
+        shape=(n_seqs, n_features),
     )
 
     return X, vocab
@@ -258,7 +308,7 @@ def _extract_and_compute_gram_k_symmetric(
         return np.zeros((len(sequences), len(sequences)), dtype=np.float64), {}
 
     logger.debug(f"Extracting features for k={k}, m={m} (weight={weight})...")
-    X_k, vocab = extract_features_weighted(sequences, k, m, mismatch_decay=0.5)
+    X_k, vocab = extract_features_weighted(sequences, k, m, mismatch_decay=0.5, n_jobs=n_inner_jobs)
     X_k = X_k.multiply(np.sqrt(weight))
     
     diag_train = np.array(X_k.multiply(X_k).sum(axis=1)).flatten()
@@ -381,13 +431,13 @@ def _extract_and_compute_asymmetric_k(
     logger.debug(f"Extracting asymmetric features for k={k}, m={m} (weight={weight})...")
     
     # 1. Compute Test Self-Norm exactly using its own vocabulary
-    X_test_self, _ = extract_features_weighted(test_seqs, k, m, mismatch_decay=0.5)
+    X_test_self, _ = extract_features_weighted(test_seqs, k, m, mismatch_decay=0.5, n_jobs=n_inner_jobs)
 
     X_test_self = X_test_self.multiply(np.sqrt(weight))
     diag_test_part = np.array(X_test_self.multiply(X_test_self).sum(axis=1)).flatten()
 
     # 2. Compute Cross-Terms using Train Vocabulary
-    X_test_cross, _ = extract_features_weighted(test_seqs, k=k, m=m, mismatch_decay=0.5, vocabulary=vocab)
+    X_test_cross, _ = extract_features_weighted(test_seqs, k=k, m=m, mismatch_decay=0.5, vocabulary=vocab, n_jobs=n_inner_jobs)
     X_test_cross = X_test_cross.multiply(np.sqrt(weight))
 
     K_part = np.zeros((num_test, num_train), dtype=np.float64)
