@@ -40,6 +40,7 @@ def main():
     add_kernel_args(parser)
     add_nu_arg(parser)
     add_execution_args(parser)
+    parser.add_argument("--model-name", type=str, default="ocsvm_pretrained.pkl", help="Name of the saved model file")
     args = parser.parse_args()
     logger.info("=====================================================")
     logger.info(" COLON CANCER SOMATIC DETECTION: PURE MODEL TRAINING")
@@ -77,7 +78,7 @@ def main():
     # 5. Save the Artifact
     save_dir = os.path.join(project_root, "models")
     os.makedirs(save_dir, exist_ok=True)
-    save_path = os.path.join(save_dir, "ocsvm_pretrained.pkl")
+    save_path = os.path.join(save_dir, args.model_name)
 
     save_svm_model(
         svm=svm,

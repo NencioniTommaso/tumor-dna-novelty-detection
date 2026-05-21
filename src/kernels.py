@@ -12,6 +12,11 @@ import logging
 import os
 from functools import lru_cache
 
+# Pin BLAS/MKL/OpenBLAS to single-threaded to avoid hidden thread contention with joblib
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
 import numpy as np
 import scipy.sparse as sp
 from sklearn.feature_extraction.text import CountVectorizer
@@ -308,25 +313,16 @@ def mixed_string_kernel(
     start_k = max(1, m + 1) if m > 0 else 1
     active_ks = [k for k in range(start_k, k_max + 1) if weights[k-1] != 0.0]
     
-    total_cores = os.cpu_count() if n_jobs == -1 else n_jobs
-    
-    large_ks = [k for k in active_ks if k > 3]
-    n_outer = max(1, len(large_ks))
-    inner_cores = max(1, total_cores // n_outer)
-
     logger.info(f"Computing Mixed String Kernel for {len(sequences)} sequences...")
-    logger.info(f"Active K-mers: {active_ks} | Cores allocated: {total_cores} (Outer jobs: {n_jobs}, Inner threads ~{inner_cores})")
+    logger.info(f"Active K-mers: {active_ks} | Sequential over k, all {n_jobs} cores to inner Gram computation")
 
-    def _jobs_for_k(k):
-        return inner_cores if k > 3 else 1
-
-    per_k_results = Parallel(n_jobs=n_jobs)(
-        delayed(_extract_and_compute_gram_k_symmetric)(
-            sequences, k, m, weights[k-1], 
-            n_inner_jobs=_jobs_for_k(k)
+    per_k_results = []
+    for k in active_ks:
+        result = _extract_and_compute_gram_k_symmetric(
+            sequences, k, m, weights[k-1],
+            n_inner_jobs=n_jobs
         )
-        for k in active_ks
-    )
+        per_k_results.append(result)
 
     logger.info("Fusing sub-grams into final kernel...")
     sub_grams = [res[0] for res in per_k_results]
@@ -444,22 +440,14 @@ def compute_asymmetric_normalized_kernel(
     if not active_ks:
         return K_cross 
 
-    total_cores = os.cpu_count() if n_jobs == -1 else n_jobs
-    large_ks = [k for k in active_ks if k > 3]
-    n_outer = max(1, len(large_ks))
-    inner_cores = max(1, total_cores // n_outer)
+    logger.info(f"Computing Asymmetric Kernel for {num_test}x{num_train} | Sequential over k, all {n_jobs} cores to inner computation")
 
-    logger.info(f"Computing Asymmetric Kernel for {num_test}x{num_train} | Cores allocated: {total_cores}")
-
-    def _jobs_for_k(k):
-        return inner_cores if k > 3 else 1
-
-    per_k_results = Parallel(n_jobs=n_jobs)(
-        delayed(_extract_and_compute_asymmetric_k)(
-            test_seqs, train_states.get(k), k, mismatches, mkl_weights[k-1], _jobs_for_k(k)
+    per_k_results = []
+    for k in active_ks:
+        result = _extract_and_compute_asymmetric_k(
+            test_seqs, train_states.get(k), k, mismatches, mkl_weights[k-1], n_inner_jobs=n_jobs
         )
-        for k in active_ks
-    )
+        per_k_results.append(result)
 
     logger.info("Fusing asymmetric sub-grams and normalizing...")
     for K_part, dt_part, dtr_part in per_k_results:
