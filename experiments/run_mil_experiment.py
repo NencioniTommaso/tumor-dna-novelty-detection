@@ -15,7 +15,7 @@ sys.path.append(project_root)
 
 # Import from our custom library
 from src.data_utils import load_tracked_patient_cohort
-from src.kernels import generate_mkl_weights, mixed_string_kernel, normalize_gram
+from src.kernels import generate_mkl_weights, mixed_string_kernel, normalize_gram, compute_asymmetric_normalized_kernel
 from src.evaluation import evaluate_novelty_detector, evaluate_patient_level_novelty
 from experiments.experiments_utils import (
     setup_logger,
@@ -27,6 +27,7 @@ from experiments.experiments_utils import (
     add_seed_arg,
     add_kernel_args,
     add_nu_arg,
+    add_seq_fpr_arg,
     add_execution_args,
     build_default_cohorts,
     validate_files_exist,
@@ -44,6 +45,7 @@ def main():
     add_seed_arg(parser)
     add_kernel_args(parser)
     add_nu_arg(parser)
+    add_seq_fpr_arg(parser)
     add_execution_args(parser)
     args = parser.parse_args()
     
@@ -73,36 +75,48 @@ def main():
         logger
     )
     
-    # --- 3. Kernel Computation ---
+    # --- 3. Kernel Computation (Train) ---
     mkl_weights = generate_mkl_weights(args.max_k, noise_threshold=max(1, 2 * args.mismatches))
-    logger.info(f"\nComputing Explicit Sparse Mismatch Kernel (Max K: {args.max_k}, Mismatches: {args.mismatches})...")
+    logger.info(f"\nComputing Explicit Sparse Mismatch Kernel for Training (Max K: {args.max_k}, Mismatches: {args.mismatches})...")
     
     start_time = time.time()
-    K_full, _ = mixed_string_kernel(
-        sequences=train_data + test_data, 
+    K_train_unnorm, train_states = mixed_string_kernel(
+        sequences=train_data, 
         k_max=args.max_k, 
         m=args.mismatches, 
         weights=mkl_weights,
         n_jobs=args.n_jobs  
     )
     
-    logger.info("Normalizing Gram Matrix...")
-    K_full = normalize_gram(K_full)
+    logger.info("Normalizing Training Gram Matrix...")
+    K_train = normalize_gram(K_train_unnorm)
     
-    # --- 4. Matrix Slicing & Sequence Anomaly Detection ---
-    num_train = len(train_data)
+    # --- 4. Kernel Computation (Test Asymmetric) ---
+    logger.info("\nComputing Asymmetric Kernel for Testing...")
+    K_test = compute_asymmetric_normalized_kernel(
+        test_seqs=test_data,
+        train_states=train_states,
+        max_k=args.max_k,
+        mismatches=args.mismatches,
+        mkl_weights=mkl_weights,
+        n_jobs=args.n_jobs
+    )
+    
+    # --- 5. Sequence Anomaly Detection ---
     logger.info(f"\nFitting One-Class SVM (nu={args.nu_param})...")
     
     # Sequence-level predictions (This is noisy, as healthy reads in a tumor patient are labeled -1)
     metrics = evaluate_novelty_detector(
-        K_train=K_full[:num_train, :num_train], 
-        K_test=K_full[num_train:, :num_train], 
+        K_train=K_train, 
+        K_test=K_test, 
         y_test_true=y_test_true_seq, 
-        nu=args.nu_param
+        nu=args.nu_param,
+        seq_fpr=args.seq_fpr
     )
     
     # --- 5. True Patient-Level Anomaly Aggregation ---
-    patient_auc = evaluate_patient_level_novelty(metrics['anomaly_scores'], test_files_info, logger)
+    tau_seq = metrics['tau_seq']
+    patient_auc = evaluate_patient_level_novelty(metrics['anomaly_scores'], test_files_info, tau_seq, logger)
     
     elapsed = time.time() - start_time
     
