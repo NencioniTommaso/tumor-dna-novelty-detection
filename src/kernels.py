@@ -430,15 +430,22 @@ def _extract_and_compute_asymmetric_k(
 
     logger.debug(f"Extracting asymmetric features for k={k}, m={m} (weight={weight})...")
     
-    # 1. Compute Test Self-Norm exactly using its own vocabulary
-    X_test_self, _ = extract_features_weighted(test_seqs, k, m, mismatch_decay=0.5, n_jobs=n_inner_jobs)
-
-    X_test_self = X_test_self.multiply(np.sqrt(weight))
-    diag_test_part = np.array(X_test_self.multiply(X_test_self).sum(axis=1)).flatten()
-
-    # 2. Compute Cross-Terms using Train Vocabulary
+    # 1. Compute Cross-Terms using Train Vocabulary
     X_test_cross, _ = extract_features_weighted(test_seqs, k=k, m=m, mismatch_decay=0.5, vocabulary=vocab, n_jobs=n_inner_jobs)
     X_test_cross = X_test_cross.multiply(np.sqrt(weight))
+
+    # Optimization: if the training vocabulary is the full permutation of the alphabet, 
+    # then X_test_cross contains all possible features for the test sequences.
+    # We can compute the diagonal directly from X_test_cross, saving a redundant extraction.
+    is_full_vocab = len(vocab) == (len(EPIGENETIC_ALPHABET) ** k)
+
+    if is_full_vocab:
+        diag_test_part = np.array(X_test_cross.multiply(X_test_cross).sum(axis=1)).flatten()
+    else:
+        # 2. Compute Test Self-Norm exactly using its own vocabulary
+        X_test_self, _ = extract_features_weighted(test_seqs, k, m, mismatch_decay=0.5, n_jobs=n_inner_jobs)
+        X_test_self = X_test_self.multiply(np.sqrt(weight))
+        diag_test_part = np.array(X_test_self.multiply(X_test_self).sum(axis=1)).flatten()
 
     K_part = np.zeros((num_test, num_train), dtype=np.float64)
 
