@@ -66,6 +66,15 @@ def add_nu_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_seq_fpr_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--seq-fpr",
+        type=float,
+        default=0.01,
+        help="Sequence-level False Positive Rate for absolute thresholding (default: 0.01).",
+    )
+
+
 def add_train_sampling_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-train",

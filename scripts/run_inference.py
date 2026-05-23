@@ -41,7 +41,7 @@ def main():
 
     start_time = time.perf_counter()
 
-    svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold, train_states = load_svm_model(
+    svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold, train_states, tau_seq = load_svm_model(
         args.model_path
     )
     logger.info(f"Loaded SVM trained on {len(train_sequences)} sequences.")
@@ -73,7 +73,7 @@ def main():
     logger.info("Predicting sequence anomalies...")
     anomaly_scores = svm.decision_function(K_test)
 
-    patient_score = compute_patient_score(anomaly_scores)
+    patient_score = compute_patient_score(anomaly_scores, tau_seq)
 
     elapsed = time.perf_counter() - start_time
     logger.info(f"Inference time: {elapsed:.2f} seconds")

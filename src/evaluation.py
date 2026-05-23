@@ -17,7 +17,8 @@ def evaluate_novelty_detector(
     K_train: np.ndarray, 
     K_test: np.ndarray, 
     y_test_true: np.ndarray, 
-    nu: float = 0.005
+    nu: float = 0.005,
+    seq_fpr: float = 0.01
 ) -> Dict[str, Any]:
     """
     Fits a One-Class SVM on a precomputed training kernel and evaluates it on the test kernel.
@@ -44,24 +45,33 @@ def evaluate_novelty_detector(
         zero_division=0
     )
     
-    logger.debug(f"Evaluation complete for nu={nu} | AUC: {auc:.4f}")
+    # Compute tau_seq on training set to enforce the desired FPR
+    # The anomaly_scores are negative for anomalies, so we invert them so higher = more anomalous
+    train_scores = -oc_svm.decision_function(K_train)
+    tau_percentile = 100.0 * (1.0 - seq_fpr)
+    tau_seq = float(np.percentile(train_scores, tau_percentile))
+    
+    logger.debug(f"Evaluation complete for nu={nu} | AUC: {auc:.4f} | tau_seq: {tau_seq:.4f}")
     
     return {
         "nu": nu,
         "auc": auc,
         "report_str": report_str,
         "predictions": predictions,
-        "anomaly_scores": anomaly_scores
+        "anomaly_scores": anomaly_scores,
+        "tau_seq": tau_seq
     }
 
 
-def compute_patient_score(seq_scores, top_fraction: float = 0.05) -> float:
+def compute_patient_score(seq_scores, tau_seq: float) -> float:
+    """
+    Computes the proportion of sequences that exceed the sequence-level threshold tau_seq.
+    """
     inverted_scores = -np.asarray(seq_scores)
-    top_k = max(1, int(len(inverted_scores) * top_fraction))
-    return float(np.mean(np.sort(inverted_scores)[-top_k:]))
+    return float(np.mean(inverted_scores > tau_seq))
 
 
-def evaluate_patient_level_novelty(anomaly_scores, test_files_info, logger):
+def evaluate_patient_level_novelty(anomaly_scores, test_files_info, tau_seq: float, logger):
     patient_y_true = []
     patient_scores = []
     current_idx = 0
@@ -73,13 +83,13 @@ def evaluate_patient_level_novelty(anomaly_scores, test_files_info, logger):
         seq_scores = anomaly_scores[current_idx: current_idx + num_seqs]
         current_idx += num_seqs
 
-        patient_score = compute_patient_score(seq_scores)
+        patient_score = compute_patient_score(seq_scores, tau_seq)
 
         patient_y_true.append(info['label'])
         patient_scores.append(patient_score)
 
         status = "TUMOR" if info['label'] == -1 else "HEALTHY"
-        logger.info(f"[{status}] {info['filename']} -> Anomaly Score: {patient_score:.4f}")
+        logger.info(f"[{status}] {info['filename']} -> Outlier Proportion: {patient_score:.4%}")
 
     patient_auc = roc_auc_score(np.array(patient_y_true) == -1, patient_scores)
     return patient_auc

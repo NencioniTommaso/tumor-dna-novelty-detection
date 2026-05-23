@@ -62,7 +62,7 @@ def main():
 
     model_path = os.path.join(project_root, "models", args.model_name)
     logger.info(f"\nLoading saved SVM model from {model_path}...")
-    svm, _, max_k, mismatches, mkl_weights, optimal_threshold, train_states = load_svm_model(model_path)
+    svm, _, max_k, mismatches, mkl_weights, optimal_threshold, train_states, tau_seq = load_svm_model(model_path)
     mkl_weights = ensure_mkl_weights(max_k, mismatches, mkl_weights)
 
     start_time = time.time()
@@ -81,7 +81,7 @@ def main():
     anomaly_scores = svm.decision_function(K_test)
     
     logger.info("\n--- Patient-Level Anomaly Aggregation ---")
-    patient_auc = evaluate_patient_level_novelty(anomaly_scores, test_files_info, logger)
+    patient_auc = evaluate_patient_level_novelty(anomaly_scores, test_files_info, tau_seq, logger)
     
     elapsed = time.time() - start_time
     logger.info(f"\nTotal Inference Execution Time: {elapsed:.2f} seconds")

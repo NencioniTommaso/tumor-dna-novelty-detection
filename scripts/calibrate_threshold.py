@@ -50,7 +50,7 @@ def main():
     start_time = time.perf_counter()
 
     # 1. Load the Pretrained Model
-    svm, train_sequences, max_k, mismatches, mkl_weights, _, train_states = load_svm_model(model_path)
+    svm, train_sequences, max_k, mismatches, mkl_weights, _, train_states, tau_seq = load_svm_model(model_path)
     
     mkl_weights = ensure_mkl_weights(max_k, mismatches, mkl_weights)
 
@@ -88,7 +88,7 @@ def main():
         seq_scores = anomaly_scores[current_idx : current_idx + num_seqs]
         current_idx += num_seqs
         
-        patient_score = compute_patient_score(seq_scores)
+        patient_score = compute_patient_score(seq_scores, tau_seq)
         
         patient_y_true.append(info['label'])
         patient_scores.append(patient_score)

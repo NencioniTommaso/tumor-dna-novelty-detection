@@ -27,6 +27,7 @@ from experiments.experiments_utils import (
     add_seed_arg,
     add_kernel_args,
     add_nu_arg,
+    add_seq_fpr_arg,
     add_execution_args,
     build_default_cohorts,
     validate_files_exist,
@@ -44,6 +45,7 @@ def main():
     add_seed_arg(parser)
     add_kernel_args(parser)
     add_nu_arg(parser)
+    add_seq_fpr_arg(parser)
     add_execution_args(parser)
     args = parser.parse_args()
     
@@ -108,11 +110,13 @@ def main():
         K_train=K_train, 
         K_test=K_test, 
         y_test_true=y_test_true_seq, 
-        nu=args.nu_param
+        nu=args.nu_param,
+        seq_fpr=args.seq_fpr
     )
     
     # --- 5. True Patient-Level Anomaly Aggregation ---
-    patient_auc = evaluate_patient_level_novelty(metrics['anomaly_scores'], test_files_info, logger)
+    tau_seq = metrics['tau_seq']
+    patient_auc = evaluate_patient_level_novelty(metrics['anomaly_scores'], test_files_info, tau_seq, logger)
     
     elapsed = time.time() - start_time
     
