@@ -112,7 +112,7 @@ def main():
     
     rng = np.random.default_rng(args.seed)
     collected_thresholds = []
-    N = 1000
+    N = 100
     for _ in range(N):
         # Stratified bootstrap: resample within each class independently
         boot_healthy = rng.choice(idx_healthy, size=len(idx_healthy), replace=True)
