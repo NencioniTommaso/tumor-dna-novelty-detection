@@ -6,6 +6,31 @@ import numpy as np
 from typing import List, Tuple, Optional
 from transformers import AutoTokenizer, AutoModel
 from sklearn.metrics.pairwise import rbf_kernel, linear_kernel
+from torch.utils.data import DataLoader, Dataset
+import os
+
+class _SequenceDataset(Dataset):
+    def __init__(self, sequences: List[str]):
+        self.sequences = sequences
+        
+    def __len__(self):
+        return len(self.sequences)
+        
+    def __getitem__(self, idx):
+        return self.sequences[idx]
+
+class TokenizerCollate:
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+
+    def __call__(self, batch):
+        return self.tokenizer(
+            batch, 
+            return_tensors='pt', 
+            padding=True, 
+            truncation=True, 
+            max_length=1500
+        )
 
 
 logger = logging.getLogger(__name__)
@@ -68,20 +93,28 @@ class DNAFoundationExtractor:
 
     @torch.no_grad()
     def extract_embeddings(self, sequences: List[str], batch_size: int = 32) -> np.ndarray:
-        """Iterates through the dataset in batches to extract latent representations."""
+        """Iterates through the dataset using a DataLoader to extract latent representations."""
         all_embeddings = []
         
-        for i in range(0, len(sequences), batch_size):
-            batch_seqs = sequences[i : i + batch_size]
+        # Prevent tokenizers from deadlocking in subprocesses
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        
+        collate_fn = TokenizerCollate(self.tokenizer)
             
-            inputs = self.tokenizer(
-                batch_seqs, 
-                return_tensors='pt', 
-                padding=True, 
-                truncation=True, 
-                max_length=1500
-            )
-            
+        num_workers = min(2, (os.cpu_count() or 2) - 1)
+        num_workers = max(0, num_workers)
+        
+        dataset = _SequenceDataset(sequences)
+        dataloader = DataLoader(
+            dataset, 
+            batch_size=batch_size, 
+            shuffle=False, 
+            num_workers=num_workers,
+            collate_fn=collate_fn,
+            pin_memory=(self.device.type == 'cuda')
+        )
+        
+        for inputs in dataloader:
             input_ids = inputs["input_ids"].to(self.device)
             attention_mask = inputs["attention_mask"].to(self.device)
             
@@ -116,6 +149,11 @@ def compute_train_test_kernels(
     Computes rigorous, leak-proof Gram matrices for train and test sets.
     Returns (K_train, K_test).
     """
+    if not torch.cuda.is_available():
+        max_threads = os.cpu_count() or 4
+        torch.set_num_threads(max_threads)
+        logger.info(f"[Optimization] Configured PyTorch to use {max_threads} CPU threads.")
+        
     logger.info(f"\n[Feature Extraction] Initializing {model_name}...")
     extractor = DNAFoundationExtractor(model_name=model_name)
     
