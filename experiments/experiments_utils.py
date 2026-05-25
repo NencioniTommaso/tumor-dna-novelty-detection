@@ -115,6 +115,11 @@ def add_execution_args(parser: argparse.ArgumentParser) -> None:
         default=-1,
         help="Number of CPU cores to use. -1 uses all (default: -1).",
     )
+    parser.add_argument(
+        "--disable-kde-downsampling",
+        action="store_true",
+        help="Disable KDE distance downsampling (Warning: slow on large datasets).",
+    )
 
 
 def add_model_path_arg(parser: argparse.ArgumentParser, project_root: str) -> None:
