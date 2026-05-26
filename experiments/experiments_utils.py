@@ -120,6 +120,12 @@ def add_execution_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Disable KDE distance downsampling (Warning: slow on large datasets).",
     )
+    parser.add_argument(
+        "--plot-dir",
+        type=str,
+        default=None,
+        help="Output directory for OA KDE plots. If not set, no plots are generated.",
+    )
 
 
 def add_model_path_arg(parser: argparse.ArgumentParser, project_root: str) -> None:

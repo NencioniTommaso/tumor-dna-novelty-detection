@@ -99,10 +99,18 @@ def main():
     )
     
     # --- 5. True Patient-Level Anomaly Aggregation via KDE & OA ---
+    final_plot_dir = None
+    if args.plot_dir:
+        import os
+        final_plot_dir = os.path.join(args.plot_dir, f"m_{args.mismatches}", f"k_{args.max_k}")
+
     patient_auc = evaluate_patient_level_oa_method(
         K_train, K_test, test_files_info, logger, 
         n_jobs=args.n_jobs, 
-        downsample_kde=not args.disable_kde_downsampling
+        downsample_kde=not args.disable_kde_downsampling,
+        plot_dir=final_plot_dir,
+        mismatches=args.mismatches,
+        max_k=args.max_k
     )
     
     elapsed = time.time() - start_time

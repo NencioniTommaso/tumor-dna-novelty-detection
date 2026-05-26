@@ -15,7 +15,7 @@ def _process_patient(info, patient_K, xs, y_intra, downsample_kde):
     oa = compute_oa(y_intra, y_inter, xs)
     patient_score = 1.0 - oa  # Higher score = more anomalous
     
-    return info['label'], patient_score, oa, info['filename']
+    return info['label'], patient_score, oa, info['filename'], y_inter
 
 def compute_distances(K: np.ndarray) -> np.ndarray:
     """
@@ -26,7 +26,7 @@ def compute_distances(K: np.ndarray) -> np.ndarray:
     dist_sq = np.clip(dist_sq, a_min=0, a_max=None)
     return np.sqrt(dist_sq)
 
-def compute_kde(distances: np.ndarray, xmax: float = None, num_points: int = 512, downsample: bool = True, max_samples: int = 100000):
+def compute_kde(distances: np.ndarray, xmax: float = None, num_points: int = 512, downsample: bool = True, max_samples: int = 2000000):
     """
     Fits a Gaussian KDE to the distances and evaluates it on a grid.
     Mirrors Innocenti's kde.py.
@@ -56,9 +56,11 @@ def compute_oa(y_intra: np.ndarray, y_inter: np.ndarray, xs: np.ndarray) -> floa
     OA = 1.0 - area / 2.0
     return OA
 
-def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n_jobs=-1, downsample_kde=True):
+def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n_jobs=-1, downsample_kde=True, plot_dir=None, mismatches=0, max_k=6):
     """
     Computes Overlapping Area (OA) per patient exactly as Innocenti does.
+    When plot_dir is provided, generates visualizations following Innocenti's
+    plotter.py and overlapping_curves_plotter.py.
     """
     logger.info("\n--- Patient-Level Anomaly Aggregation (OA Method) ---")
     logger.info("Computing Healthy Intra-Distances and Reference KDE...")
@@ -88,12 +90,73 @@ def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n
         delayed(_process_patient)(info, patient_K, xs, y_intra, downsample_kde) for info, patient_K in tasks
     )
     
-    for label, score, oa, filename in results:
+    # Collect results and build data for plotting
+    patient_plot_data = []
+    for label, score, oa, filename, y_inter in results:
         patient_y_true.append(label)
         patient_scores.append(score)
         
+        # Shorten filename (e.g. Colo_6_merged_subset_1200000.fa -> Colo_6)
+        parts = filename.split("_")
+        short_name = f"{parts[0]}_{parts[1]}" if len(parts) >= 2 else filename
+        
+        patient_plot_data.append({
+            'filename': short_name,
+            'label': label,
+            'oa': oa,
+            'y_inter': y_inter,
+        })
+        
         status = "TUMOR" if label == -1 else "HEALTHY"
-        logger.info(f"[{status}] {filename} -> Overlapping Area: {oa:.4f} | Anomaly Score: {score:.4f}")
+        logger.info(f"[{status}] {short_name} -> Overlapping Area: {oa:.4f} | Anomaly Score: {score:.4f}")
 
     patient_auc = roc_auc_score(np.array(patient_y_true) == -1, patient_scores)
+    
+    # --- Generate plots if plot_dir is provided ---
+    if plot_dir is not None:
+        import os
+        from src.plotter_oa import (
+            plot_single_patient_oa,
+            plot_all_patients_overlay,
+            plot_results_patients,
+            make_split_plot,
+        )
+        
+        metric_name = f"kernel (m={mismatches}, k={max_k})"
+        
+        # 1. Per-patient OA plots (individual KDE curves + shading)
+        per_patient_dir = os.path.join(plot_dir, "per_patient")
+        for pdata in patient_plot_data:
+            path = plot_single_patient_oa(
+                xs, y_intra, pdata['y_inter'], pdata['oa'],
+                patient_name=pdata['filename'],
+                metric_name=metric_name,
+                out_dir=per_patient_dir,
+            )
+            logger.info(f"  Saved per-patient plot: {path}")
+        
+        # 2. All patients overlay (mirrors overlapping_curves_plotter.py)
+        path = plot_all_patients_overlay(
+            xs, y_intra, patient_plot_data,
+            metric_name=metric_name,
+            out_dir=plot_dir,
+        )
+        logger.info(f"  Saved all-patients overlay: {path}")
+        
+        # 3. Results bar chart (mirrors plotter.plot_results_patients)
+        path = plot_results_patients(
+            patient_plot_data,
+            metric_name=metric_name,
+            out_dir=plot_dir,
+        )
+        logger.info(f"  Saved results bar chart: {path}")
+        
+        # 4. Split plot (mirrors plotter.make_split_plot)
+        path = make_split_plot(
+            patient_plot_data,
+            metric_name=metric_name,
+            out_dir=plot_dir,
+        )
+        logger.info(f"  Saved split plot: {path}")
+    
     return patient_auc

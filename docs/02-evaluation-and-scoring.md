@@ -84,37 +84,57 @@ Lower values make the system more specific (fewer false alarms) but less sensiti
 
 ---
 
-## Patient-Level Scoring: Outlier Proportion
+## Patient-Level Scoring: Overlapping Area (OA)
 
 ### From Sequences to Patients
 
-Each patient contributes hundreds or thousands of DNA sequences. The SVM scores each sequence individually, but the clinical question is about the **patient**: do they have cancer?
+Each patient contributes hundreds or thousands of DNA sequences. While we can score sequences individually (e.g. via OC-SVM), the core clinical question is about the **patient**: do they have cancer?
 
-This is a **Multiple Instance Learning (MIL)** problem:
-- A patient is a **bag** of sequence **instances**.
-- The bag is positive (tumor) if *some* of its instances are anomalous.
+Instead of thresholding individual sequence scores, the new pipeline uses a distribution-based approach by computing the **Overlapping Area (OA)** between sequence distance distributions.
 
 ### The Aggregation Method
 
-The patient score is the **proportion of sequences that exceed τ_seq**:
+The patient score is calculated by comparing two distributions of sequence distances:
+1. **Reference Distribution (Healthy Intra-Distances)**: Pairwise distances between all sequences in the healthy training set.
+2. **Patient Distribution (Inter-Distances)**: Distances between the patient's sequences and the healthy training sequences.
+
+Distances are derived directly from the precomputed kernel matrix (assuming a normalized kernel where $K(x,x)=1$):
+`D^2(x,y) = K(x,x) + K(y,y) - 2K(x,y) = 2 - 2K(x,y)`
+
+We fit a Gaussian Kernel Density Estimate (KDE) to both sets of distances. The Overlapping Area (OA) is then computed as the area intersected by the two KDE curves. 
 
 ```python
-def compute_patient_score(seq_scores, tau_seq):
-    inverted_scores = -np.asarray(seq_scores)
-    return float(np.mean(inverted_scores > tau_seq))
+def compute_patient_score(patient_K, y_intra, xs, downsample_kde=True):
+    # Compute patient vs healthy distances
+    patient_inter_distances = compute_distances(patient_K.flatten())
+    
+    # Fit KDE for patient distances
+    _, y_inter = compute_kde(
+        patient_inter_distances, xmax=xs[-1], num_points=len(xs), downsample=downsample_kde
+    )
+    
+    # Compute Overlapping Area
+    area = np.trapezoid(np.abs(y_intra - y_inter), xs)
+    oa = 1.0 - area / 2.0
+    
+    # Final anomaly score (Higher score = more anomalous)
+    return 1.0 - oa
 ```
 
-This returns a value between 0.0 and 1.0:
+This returns an anomaly score between 0.0 and 1.0.
 
-### Why Outlier Proportion > Top-K Averaging
+### The Downsample Parameter
 
-The previous method averaged the raw anomaly scores of the top 5% most anomalous sequences. This had issues:
-- **Sensitive to tumor fraction**: If a patient had only 1% tumor DNA, the top 5% average diluted the signal with 4% healthy noise.
-- **Magnitude-dependent**: Raw scores depend on kernel normalization, making cross-experiment comparisons fragile.
+Because the number of pairwise distances grows quadratically (e.g., thousands of sequences result in millions of distances), fitting a KDE on the full set is computationally prohibitive. 
 
-Outlier Proportion fixes both:
-- It dynamically adapts to any tumor fraction.
-- The output is a unit-free proportion, always between 0 and 1.
+To address this, we use a `downsample` parameter in the KDE computation. When `downsample=True`, we randomly sample up to a maximum number of distances (defaulting to 2,000,000). We explicitly tried to change the downsample parameter in order to have a good approximation of the real value without slowing down the pipeline unnecessarily. This specific value guarantees that the KDE accurately reflects the true distance distribution while avoiding out-of-memory errors or extreme slowdowns.
+
+### Why Overlapping Area > Outlier Proportion
+
+The previous method ("Outlier Proportion") relied on calculating the proportion of sequences exceeding a strict anomaly threshold (`τ_seq`). The OA method improves upon this because:
+- **Distributional Robustness**: By comparing entire distributions rather than relying on a hard cutoff point, it is highly robust to noise and varying tumor fractions.
+- **Threshold-free**: We no longer need to calibrate a sequence-level threshold (`τ_seq`) on the training set.
+- **Unit-free Measure**: The OA provides a robust metric that is strictly bounded between 0.0 and 1.0.
 
 ---
 
