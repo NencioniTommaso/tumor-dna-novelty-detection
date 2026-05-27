@@ -111,5 +111,6 @@ python3 scripts/run_inference.py \
 | **Outlier Proportion** | Patient score = fraction of their sequences exceeding τ_seq | `src/evaluation.py` |
 | **τ_pat (optimal_threshold)** | Patient-level decision boundary found via bootstrapped Youden's J | `scripts/calibrate_threshold.py` |
 | **MIL (Multiple Instance Learning)** | Framework where patients are "bags" of sequence "instances" | Entire pipeline |
+| **OA Pipeline (Overlapping Area)** | Distribution-based scoring comparing patient KDEs to healthy KDEs | `src/evaluation_oa.py`, `docs/07-oa-pipeline.md` |
 
 For detailed explanations of each concept, see the individual documentation files in this folder.

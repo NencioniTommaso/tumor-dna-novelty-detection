@@ -54,7 +54,7 @@ def compute_oa(y_intra: np.ndarray, y_inter: np.ndarray, xs: np.ndarray) -> floa
     OA = 1.0 - area / 2.0
     return OA
 
-def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n_jobs=-1, downsample_kde=True, plot_dir=None, mismatches=0, max_k=6, seed=42):
+def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n_jobs=-1, downsample_kde=True, plot_dir=None, mismatches=0, max_k=6, seed=42, is_deep=False):
     """
     Computes Overlapping Area (OA) per patient.
     When plot_dir is provided, generates visualizations.
@@ -119,7 +119,10 @@ def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n
             make_split_plot,
         )
         
-        metric_name = f"kernel (m={mismatches}, k={max_k})"
+        if is_deep:
+            metric_name = "Deep RBF Kernel"
+        else:
+            metric_name = f"kernel (m={mismatches}, k={max_k})"
         
         # 1. Per-patient OA plots (individual KDE curves + shading)
         per_patient_dir = os.path.join(plot_dir, "per_patient")
@@ -133,7 +136,7 @@ def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n
             )
             logger.info(f"  Saved per-patient plot: {path}")
         
-        # 2. All patients overlay (mirrors overlapping_curves_plotter.py)
+        # 2. All patients overlay
         path = plot_all_patients_overlay(
             xs, y_intra, patient_plot_data,
             metric_name=metric_name,
@@ -142,7 +145,7 @@ def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n
         )
         logger.info(f"  Saved all-patients overlay: {path}")
         
-        # 3. Results bar chart (mirrors plotter.plot_results_patients)
+        # 3. Results bar chart
         path = plot_results_patients(
             patient_plot_data,
             metric_name=metric_name,
@@ -151,7 +154,7 @@ def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n
         )
         logger.info(f"  Saved results bar chart: {path}")
         
-        # 4. Split plot (mirrors plotter.make_split_plot)
+        # 4. Split plot
         path = make_split_plot(
             patient_plot_data,
             metric_name=metric_name,
