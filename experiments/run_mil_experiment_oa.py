@@ -1,7 +1,7 @@
 """
 run_mil_experiment_oa.py
 Executes a Patient-Level MIL pipeline for Colon Cancer Novelty Detection
-using the Overlapping Area (OA) KDE methodology from Innocenti.
+using the Overlapping Area (OA) KDE methodology.
 """
 
 import time
@@ -110,7 +110,8 @@ def main():
         downsample_kde=not args.disable_kde_downsampling,
         plot_dir=final_plot_dir,
         mismatches=args.mismatches,
-        max_k=args.max_k
+        max_k=args.max_k,
+        seed=args.seed
     )
     
     elapsed = time.time() - start_time

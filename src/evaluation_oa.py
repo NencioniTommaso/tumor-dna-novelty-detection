@@ -29,7 +29,6 @@ def compute_distances(K: np.ndarray) -> np.ndarray:
 def compute_kde(distances: np.ndarray, xmax: float = None, num_points: int = 512, downsample: bool = True, max_samples: int = 2000000):
     """
     Fits a Gaussian KDE to the distances and evaluates it on a grid.
-    Mirrors Innocenti's kde.py.
     """
     valid = distances[~np.isnan(distances)]
     
@@ -50,17 +49,15 @@ def compute_kde(distances: np.ndarray, xmax: float = None, num_points: int = 512
 def compute_oa(y_intra: np.ndarray, y_inter: np.ndarray, xs: np.ndarray) -> float:
     """
     Computes Overlapping Area (OA) between two KDE curves.
-    Mirrors Innocenti's overllappingArea.py.
     """
     area = np.trapezoid(np.abs(y_intra - y_inter), xs)
     OA = 1.0 - area / 2.0
     return OA
 
-def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n_jobs=-1, downsample_kde=True, plot_dir=None, mismatches=0, max_k=6):
+def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n_jobs=-1, downsample_kde=True, plot_dir=None, mismatches=0, max_k=6, seed=42):
     """
-    Computes Overlapping Area (OA) per patient exactly as Innocenti does.
-    When plot_dir is provided, generates visualizations following Innocenti's
-    plotter.py and overlapping_curves_plotter.py.
+    Computes Overlapping Area (OA) per patient.
+    When plot_dir is provided, generates visualizations.
     """
     logger.info("\n--- Patient-Level Anomaly Aggregation (OA Method) ---")
     logger.info("Computing Healthy Intra-Distances and Reference KDE...")
@@ -132,6 +129,7 @@ def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n
                 patient_name=pdata['filename'],
                 metric_name=metric_name,
                 out_dir=per_patient_dir,
+                seed=seed,
             )
             logger.info(f"  Saved per-patient plot: {path}")
         
@@ -140,6 +138,7 @@ def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n
             xs, y_intra, patient_plot_data,
             metric_name=metric_name,
             out_dir=plot_dir,
+            seed=seed,
         )
         logger.info(f"  Saved all-patients overlay: {path}")
         
@@ -148,6 +147,7 @@ def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n
             patient_plot_data,
             metric_name=metric_name,
             out_dir=plot_dir,
+            seed=seed,
         )
         logger.info(f"  Saved results bar chart: {path}")
         
@@ -156,6 +156,7 @@ def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n
             patient_plot_data,
             metric_name=metric_name,
             out_dir=plot_dir,
+            seed=seed,
         )
         logger.info(f"  Saved split plot: {path}")
     

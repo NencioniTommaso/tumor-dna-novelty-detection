@@ -1,12 +1,10 @@
 """
 plotter_oa.py
 Plotting utilities for the Overlapping Area (OA) KDE methodology.
-Follows Innocenti's plotter.py and overlapping_curves_plotter.py closely.
 """
 
 import os
 import re
-from datetime import datetime
 from collections import defaultdict
 from itertools import cycle
 
@@ -14,7 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
-# ---------- Color cycle for fill_between (mirrors Innocenti) ----------
+# ---------- Color cycle for fill_between ----------
 _fill_colors = cycle(plt.cm.Set2.colors)
 
 
@@ -34,7 +32,6 @@ def init_overlapping_plot(
 ):
     """
     Create a plot with one or two KDE curves.
-    Mirrors Innocenti's plotter.init_overlapping_plot exactly.
     """
     OA_label = None
     if OA is not None:
@@ -81,7 +78,6 @@ def init_overlapping_plot(
 def add_overlapping_curves(ax, xs, ys, color=None, alpha=None, label=None, line_width=0.5):
     """
     Add an additional curve to an existing plot.
-    Mirrors Innocenti's plotter.add_overlapping_curves exactly.
     """
     local_alpha = alpha if alpha is not None else 0.5
     if color is not None:
@@ -93,7 +89,6 @@ def add_overlapping_curves(ax, xs, ys, color=None, alpha=None, label=None, line_
 def _patient_key(name):
     """
     Sort key: healthy patients first, then by number.
-    Mirrors Innocenti's plotter.patient_key.
     """
     prefix = 0 if name.lower().startswith("healthy") else 1
     match = re.search(r"(\d+)", name)
@@ -109,12 +104,12 @@ def plot_single_patient_oa(
     patient_name,
     metric_name,
     out_dir,
+    seed,
     label_intra="Reference (Healthy Intra)",
     label_inter=None,
 ):
     """
     Plot the two KDE curves and OA shading for a single patient.
-    Directly mirrors Innocenti's single-patient overlapping plot.
     """
     if label_inter is None:
         label_inter = f"{patient_name} (Inter)"
@@ -141,9 +136,8 @@ def plot_single_patient_oa(
     fig.tight_layout()
 
     os.makedirs(out_dir, exist_ok=True)
-    now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_name = re.sub(r"[^\w\-.]", "_", patient_name)
-    out_path = os.path.join(out_dir, f"{safe_name}_oa_{now_str}.pdf")
+    out_path = os.path.join(out_dir, f"{safe_name}_oa_seed{seed}.pdf")
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     return out_path
@@ -155,6 +149,7 @@ def plot_all_patients_overlay(
     patient_results,
     metric_name,
     out_dir,
+    seed,
     ref_label="reference pdf",
     healthy_label="healthy",
     tumor_label="tumor",
@@ -163,7 +158,6 @@ def plot_all_patients_overlay(
 ):
     """
     Overlay all patient inter-KDE curves on top of the reference intra-KDE.
-    Mirrors Innocenti's overlapping_curves_plotter.plot_overlapping_curves_patients.
 
     Parameters
     ----------
@@ -207,14 +201,13 @@ def plot_all_patients_overlay(
     fig.tight_layout()
 
     os.makedirs(out_dir, exist_ok=True)
-    now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = os.path.join(out_dir, f"all_patients_overlay_{now_str}.pdf")
+    out_path = os.path.join(out_dir, f"all_patients_overlay_seed{seed}.pdf")
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     return out_path
 
 
-def plot_results_patients(patient_results, metric_name, out_dir):
+def plot_results_patients(patient_results, metric_name, out_dir, seed):
     """
     Bar chart of OA values per patient, sorted healthy-first.
     Mirrors Innocenti's plotter.plot_results_patients, adapted for single
@@ -270,17 +263,15 @@ def plot_results_patients(patient_results, metric_name, out_dir):
 
     plt.tight_layout()
     os.makedirs(out_dir, exist_ok=True)
-    now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = os.path.join(out_dir, f"oa_results_patients_{now_str}.pdf")
+    out_path = os.path.join(out_dir, f"oa_results_patients_seed{seed}.pdf")
     plt.savefig(out_path, dpi=150)
     plt.close()
     return out_path
 
 
-def make_split_plot(patient_results, metric_name, out_dir):
+def make_split_plot(patient_results, metric_name, out_dir, seed):
     """
     Split plot: healthy on left, tumor on right.
-    Mirrors Innocenti's plotter.make_split_plot, adapted for single OA values.
     """
     patient_results = sorted(patient_results, key=lambda r: _patient_key(r["filename"]))
 
@@ -338,8 +329,7 @@ def make_split_plot(patient_results, metric_name, out_dir):
 
     plt.tight_layout()
     os.makedirs(out_dir, exist_ok=True)
-    now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = os.path.join(out_dir, f"oa_split_plot_{now_str}.pdf")
+    out_path = os.path.join(out_dir, f"oa_split_plot_seed{seed}.pdf")
     plt.savefig(out_path, dpi=150)
     plt.close()
     return out_path

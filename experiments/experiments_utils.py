@@ -157,22 +157,21 @@ def add_sample_size_arg(parser: argparse.ArgumentParser) -> None:
 def build_train_normal_files(data_dir: str) -> list[str]:
     return [
         os.path.join(data_dir, f"Healthy_{i}_merged_subset_1200000.fa")
-        for i in range(2, 6)
+        for i in range(2, 5)
     ]
 
 
 def build_test_normal_files(data_dir: str) -> list[str]:
     return [
         os.path.join(data_dir, f"Healthy_{i}_merged_subset_1200000.fa")
-        for i in range(6, 8)
+        for i in range(5, 8)
     ]
 
 
 def build_tumor_files(data_dir: str) -> list[str]:
     return [
         os.path.join(data_dir, f"Colo_{i}_merged_subset_1200000.fa")
-        for i in range(1, 11)
-        if i != 9
+        for i in [11, 12, 13]
     ]
 
 
