@@ -54,23 +54,43 @@ def compute_oa(y_intra: np.ndarray, y_inter: np.ndarray, xs: np.ndarray) -> floa
     OA = 1.0 - area / 2.0
     return OA
 
-def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n_jobs=-1, downsample_kde=True, plot_dir=None, mismatches=0, max_k=6, seed=42, is_deep=False):
+def compute_reference_kde(K_train, downsample_kde=True):
+    """Compute intra-distances and KDE from a normalized training Gram matrix.
+
+    This is the standalone version of the reference distribution computation,
+    extracted so it can be reused by build_reference.py and other scripts.
+
+    Returns (xs, y_intra) — the reference distribution.
+    """
+    N_train = K_train.shape[0]
+    indices_i, indices_j = np.triu_indices(N_train, k=1)
+    train_intra_kernel_vals = K_train[indices_i, indices_j]
+    train_intra_distances = compute_distances(train_intra_kernel_vals)
+    xs, y_intra = compute_kde(train_intra_distances, downsample=downsample_kde)
+    return xs, y_intra
+
+
+def evaluate_patient_level_oa_method(K_train, K_test, test_files_info, logger, n_jobs=-1, downsample_kde=True, plot_dir=None, mismatches=0, max_k=6, seed=42, is_deep=False, xs_ref=None, y_intra_ref=None):
     """
     Computes Overlapping Area (OA) per patient.
     When plot_dir is provided, generates visualizations.
+
+    Parameters
+    ----------
+    xs_ref : np.ndarray, optional
+        Pre-computed reference KDE evaluation grid. When provided together
+        with y_intra_ref, skips recomputation from K_train.
+    y_intra_ref : np.ndarray, optional
+        Pre-computed reference KDE values.
     """
     logger.info("\n--- Patient-Level Anomaly Aggregation (OA Method) ---")
-    logger.info("Computing Healthy Intra-Distances and Reference KDE...")
 
-    # 1. Compute intra-distances from K_train (healthy vs healthy)
-    N_train = K_train.shape[0]
-    
-    # Extract strictly the upper triangle (no self-comparisons)
-    indices_i, indices_j = np.triu_indices(N_train, k=1)
-    train_intra_kernel_vals = K_train[indices_i, indices_j]
-    
-    train_intra_distances = compute_distances(train_intra_kernel_vals)
-    xs, y_intra = compute_kde(train_intra_distances, downsample=downsample_kde)
+    if xs_ref is not None and y_intra_ref is not None:
+        logger.info("Using pre-computed reference distribution.")
+        xs, y_intra = xs_ref, y_intra_ref
+    else:
+        logger.info("Computing Healthy Intra-Distances and Reference KDE...")
+        xs, y_intra = compute_reference_kde(K_train, downsample_kde)
     
     patient_y_true = []
     patient_scores = []

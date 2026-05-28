@@ -333,3 +333,43 @@ def make_split_plot(patient_results, metric_name, out_dir, seed):
     plt.savefig(out_path, dpi=150)
     plt.close()
     return out_path
+
+
+def plot_pairwise_oa_heatmap(oa_matrix, labels, out_dir, seed):
+    """
+    Plot an annotated heatmap of pairwise OA values between reference distributions.
+
+    Parameters
+    ----------
+    oa_matrix : np.ndarray, shape (N, N)
+        Symmetric matrix where oa_matrix[i,j] = OA between reference i and reference j.
+    labels : list[str]
+        Short label for each combination, e.g. ["H2+H3+H4", "H2+H3+H5", ...].
+    out_dir : str
+        Output directory for the plot.
+    seed : int
+        Seed used (for filename).
+    """
+    n = len(labels)
+    fig, ax = plt.subplots(figsize=(max(6, n * 1.5), max(5, n * 1.2)))
+    im = ax.imshow(oa_matrix, cmap="YlGnBu", vmin=oa_matrix.min() - 0.01, vmax=1.0)
+
+    # Annotate each cell with its OA value
+    for i in range(n):
+        for j in range(n):
+            ax.text(j, i, f"{oa_matrix[i, j]:.3f}", ha="center", va="center", fontsize=7)
+
+    ax.set_xticks(range(n))
+    ax.set_yticks(range(n))
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.set_title("Pairwise OA Between Reference Distributions")
+    fig.colorbar(im, ax=ax, shrink=0.8)
+    fig.tight_layout()
+
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"reference_pairwise_oa_seed{seed}.pdf")
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
+

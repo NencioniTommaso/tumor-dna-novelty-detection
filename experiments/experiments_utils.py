@@ -194,3 +194,23 @@ def validate_files_exist(file_paths: list[str], logger: logging.Logger) -> bool:
     for path in missing_files:
         logger.error(f"Cannot find file: {path}")
     return False
+
+
+def add_ref_path_arg(parser: argparse.ArgumentParser) -> None:
+    """Add --ref-path argument for loading a pre-built reference artifact."""
+    parser.add_argument(
+        "--ref-path",
+        type=str,
+        default=None,
+        help="Path to a pre-built reference artifact (.pkl). "
+             "When set, training data is loaded from the artifact and "
+             "--seed only controls test sampling.",
+    )
+
+
+def build_all_healthy_files(data_dir: str) -> list[str]:
+    """Returns ALL 6 available healthy files (Healthy_2 through Healthy_7)."""
+    return [
+        os.path.join(data_dir, f"Healthy_{i}_merged_subset_1200000.fa")
+        for i in range(2, 8)
+    ]
