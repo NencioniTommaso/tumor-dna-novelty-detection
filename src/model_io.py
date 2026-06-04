@@ -11,7 +11,7 @@ import joblib
 logger = logging.getLogger(__name__)
 
 
-def save_svm_model(svm, train_sequences, max_k, mismatches, nu_param, save_path, mkl_weights=None, train_states=None, tau_seq=None):
+def save_svm_model(svm, train_sequences, max_k, mismatches, nu_param, save_path, mkl_weights=None, train_states=None):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     state = {
@@ -22,7 +22,6 @@ def save_svm_model(svm, train_sequences, max_k, mismatches, nu_param, save_path,
         'nu_param': nu_param,
         'mkl_weights': mkl_weights,
         'train_states': train_states,
-        'tau_seq': tau_seq,
     }
 
     logger.info(f"Saving SVM state to {save_path}...")
@@ -34,7 +33,7 @@ def load_svm_model(model_path):
     """
     Load a precomputed-kernel OC-SVM artifact.
 
-    Returns (svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold, train_states, tau_seq).
+    Returns (svm, train_sequences, max_k, mismatches, mkl_weights, train_states).
     """
     if not os.path.exists(model_path):
         logger.error(f"Model file not found at {model_path}")
@@ -48,8 +47,6 @@ def load_svm_model(model_path):
     max_k = saved_state.get('max_k')
     mismatches = saved_state.get('mismatches')
     mkl_weights = saved_state.get('mkl_weights')
-    optimal_threshold = saved_state.get('optimal_threshold')
     train_states = saved_state.get('train_states')
-    tau_seq = saved_state.get('tau_seq')
 
-    return svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold, train_states, tau_seq
+    return svm, train_sequences, max_k, mismatches, mkl_weights, train_states

@@ -26,7 +26,6 @@ from experiments.experiments_utils import (
     add_seed_arg,
     add_kernel_args,
     add_nu_arg,
-    add_seq_fpr_arg,
     add_execution_args,
     build_train_normal_files,
 )
@@ -41,7 +40,7 @@ def main():
     add_seed_arg(parser)
     add_kernel_args(parser)
     add_nu_arg(parser)
-    add_seq_fpr_arg(parser)
+
     add_execution_args(parser)
     parser.add_argument("--model-name", type=str, default="ocsvm_pretrained.pkl", help="Name of the saved model file")
     args = parser.parse_args()
@@ -78,13 +77,6 @@ def main():
     svm = OneClassSVM(kernel='precomputed', nu=args.nu_param)
     svm.fit(K_train)
     
-    # 4.5 Compute tau_seq
-    tau_percentile = 100.0 * (1.0 - args.seq_fpr)
-    logger.info(f"Computing tau_seq ({args.seq_fpr*100:.2f}% FPR) from training data...")
-    train_scores = -svm.decision_function(K_train)
-    tau_seq = float(np.percentile(train_scores, tau_percentile))
-    logger.info(f"tau_seq calibrated to: {tau_seq:.4f}")
-    
     # 5. Save the Artifact
     save_dir = os.path.join(project_root, "models")
     os.makedirs(save_dir, exist_ok=True)
@@ -99,7 +91,6 @@ def main():
         mkl_weights=mkl_weights,
         save_path=save_path,
         train_states=train_states,
-        tau_seq=tau_seq,
     )
 
     elapsed = time.perf_counter() - start_time

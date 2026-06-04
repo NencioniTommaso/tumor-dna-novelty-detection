@@ -2,6 +2,7 @@
 run_inference.py
 Loads a pre-trained Patient-Level MIL model and efficiently calculates
 only the asymmetric inference kernel for new patients, avoiding memory bloat.
+Outputs the raw anomaly scores for inspection.
 """
 
 import os
@@ -24,7 +25,6 @@ from experiments.experiments_utils import (
 )
 from src.data_utils import MMapFastaReader
 from src.kernels import compute_asymmetric_normalized_kernel, ensure_mkl_weights
-from src.evaluation import compute_patient_score
 from src.model_io import load_svm_model
 
 logger = setup_logger(__name__)
@@ -41,7 +41,7 @@ def main():
 
     start_time = time.perf_counter()
 
-    svm, train_sequences, max_k, mismatches, mkl_weights, optimal_threshold, train_states, tau_seq = load_svm_model(
+    svm, train_sequences, max_k, mismatches, mkl_weights, train_states = load_svm_model(
         args.model_path
     )
     logger.info(f"Loaded SVM trained on {len(train_sequences)} sequences.")
@@ -73,26 +73,18 @@ def main():
     logger.info("Predicting sequence anomalies...")
     anomaly_scores = svm.decision_function(K_test)
 
-    patient_score = compute_patient_score(anomaly_scores, tau_seq)
+    # Invert so higher = more anomalous
+    inverted_scores = -anomaly_scores
+    patient_score = float(np.mean(inverted_scores))
 
     elapsed = time.perf_counter() - start_time
     logger.info(f"Inference time: {elapsed:.2f} seconds")
 
     logger.info("\n=====================================================")
     logger.info(f" PATIENT FASTA: {os.path.basename(args.patient_file)}")
-    logger.info(f" FINAL ANOMALY SCORE: {patient_score:.4f}")
+    logger.info(f" MEAN ANOMALY SCORE: {patient_score:.4f}")
+    logger.info(f" NUM SEQUENCES SCORED: {len(anomaly_scores)}")
     logger.info("=====================================================\n")
-
-    if optimal_threshold is None:
-        logger.warning("Model has not been calibrated! Run calibrate_threshold.py first.")
-        logger.warning("Cannot provide a definitive Tumor/Healthy diagnosis.")
-    else:
-        if patient_score >= optimal_threshold:
-            diagnosis = "🚨 TUMOR DETECTED"
-        else:
-            diagnosis = "✅ HEALTHY"
-        
-        logger.info(f" DIAGNOSIS: {diagnosis}")
 
 
 if __name__ == "__main__":
