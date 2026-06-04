@@ -66,13 +66,6 @@ def add_nu_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_seq_fpr_arg(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--seq-fpr",
-        type=float,
-        default=0.01,
-        help="Sequence-level False Positive Rate for absolute thresholding (default: 0.01).",
-    )
 
 
 def add_train_sampling_arg(parser: argparse.ArgumentParser) -> None:
@@ -115,6 +108,17 @@ def add_execution_args(parser: argparse.ArgumentParser) -> None:
         default=-1,
         help="Number of CPU cores to use. -1 uses all (default: -1).",
     )
+    parser.add_argument(
+        "--disable-kde-downsampling",
+        action="store_true",
+        help="Disable KDE distance downsampling (Warning: slow on large datasets).",
+    )
+    parser.add_argument(
+        "--plot-dir",
+        type=str,
+        default=None,
+        help="Output directory for OA KDE plots. If not set, no plots are generated.",
+    )
 
 
 def add_model_path_arg(parser: argparse.ArgumentParser, project_root: str) -> None:
@@ -146,22 +150,21 @@ def add_sample_size_arg(parser: argparse.ArgumentParser) -> None:
 def build_train_normal_files(data_dir: str) -> list[str]:
     return [
         os.path.join(data_dir, f"Healthy_{i}_merged_subset_1200000.fa")
-        for i in range(2, 6)
+        for i in range(2, 5)
     ]
 
 
 def build_test_normal_files(data_dir: str) -> list[str]:
     return [
         os.path.join(data_dir, f"Healthy_{i}_merged_subset_1200000.fa")
-        for i in range(6, 8)
+        for i in range(5, 8)
     ]
 
 
 def build_tumor_files(data_dir: str) -> list[str]:
     return [
         os.path.join(data_dir, f"Colo_{i}_merged_subset_1200000.fa")
-        for i in range(1, 11)
-        if i != 9
+        for i in [11, 12, 13]
     ]
 
 
@@ -184,3 +187,23 @@ def validate_files_exist(file_paths: list[str], logger: logging.Logger) -> bool:
     for path in missing_files:
         logger.error(f"Cannot find file: {path}")
     return False
+
+
+def add_ref_path_arg(parser: argparse.ArgumentParser) -> None:
+    """Add --ref-path argument for loading a pre-built reference artifact."""
+    parser.add_argument(
+        "--ref-path",
+        type=str,
+        default=None,
+        help="Path to a pre-built reference artifact (.pkl). "
+             "When set, training data is loaded from the artifact and "
+             "--seed only controls test sampling.",
+    )
+
+
+def build_all_healthy_files(data_dir: str) -> list[str]:
+    """Returns ALL 6 available healthy files (Healthy_2 through Healthy_7)."""
+    return [
+        os.path.join(data_dir, f"Healthy_{i}_merged_subset_1200000.fa")
+        for i in range(2, 8)
+    ]

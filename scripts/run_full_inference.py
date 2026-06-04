@@ -1,3 +1,9 @@
+"""
+run_full_inference.py
+Runs full cohort inference using a saved SVM model to replicate exact MIL
+experiment sequences. Outputs raw anomaly scores and patient-level AUC.
+"""
+
 import sys
 import os
 import time
@@ -62,7 +68,7 @@ def main():
 
     model_path = os.path.join(project_root, "models", args.model_name)
     logger.info(f"\nLoading saved SVM model from {model_path}...")
-    svm, _, max_k, mismatches, mkl_weights, optimal_threshold, train_states, tau_seq = load_svm_model(model_path)
+    svm, _, max_k, mismatches, mkl_weights, train_states = load_svm_model(model_path)
     mkl_weights = ensure_mkl_weights(max_k, mismatches, mkl_weights)
 
     start_time = time.time()
@@ -80,11 +86,21 @@ def main():
     logger.info("\nPredicting sequence anomalies...")
     anomaly_scores = svm.decision_function(K_test)
     
-    logger.info("\n--- Patient-Level Anomaly Aggregation ---")
-    patient_auc = evaluate_patient_level_novelty(anomaly_scores, test_files_info, tau_seq, logger)
+    final_plot_dir = None
+    if args.plot_dir:
+        final_plot_dir = os.path.join(args.plot_dir, f"m_{mismatches}", f"k_{max_k}")
+
+    patient_auc = evaluate_patient_level_novelty(
+        anomaly_scores, 
+        test_files_info, 
+        logger, 
+        plot_dir=final_plot_dir,
+        seed=args.seed
+    )
     
     elapsed = time.time() - start_time
     logger.info(f"\nTotal Inference Execution Time: {elapsed:.2f} seconds")
+    logger.info(f"PATIENT-LEVEL ROC-AUC: {patient_auc:.4f}")
 
 if __name__ == "__main__":
     main()

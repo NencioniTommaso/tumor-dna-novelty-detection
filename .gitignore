@@ -9,6 +9,7 @@ data/.fai_cache/
 
 #Experiment Outputs
 experiments/heatmaps/
+results/
 
 # Pretrained Models and Checkpoints
 models/

@@ -1,10 +1,10 @@
 """
 evaluation.py
 Handles the training, predicting, and evaluation of the anomaly detection model.
-Optimized to support parallelized hyperparameter sweeps across CPU cores.
 """
 
 import logging
+import re
 import numpy as np
 from sklearn.svm import OneClassSVM
 from sklearn.metrics import classification_report, roc_auc_score
@@ -18,10 +18,10 @@ def evaluate_novelty_detector(
     K_test: np.ndarray, 
     y_test_true: np.ndarray, 
     nu: float = 0.005,
-    seq_fpr: float = 0.01
 ) -> Dict[str, Any]:
     """
     Fits a One-Class SVM on a precomputed training kernel and evaluates it on the test kernel.
+    Returns the fitted model and raw anomaly scores.
     """
     logger.debug(f"Initializing One-Class SVM with nu={nu}")
     oc_svm = OneClassSVM(kernel='precomputed', nu=nu)
@@ -45,13 +45,7 @@ def evaluate_novelty_detector(
         zero_division=0
     )
     
-    # Compute tau_seq on training set to enforce the desired FPR
-    # The anomaly_scores are negative for anomalies, so we invert them so higher = more anomalous
-    train_scores = -oc_svm.decision_function(K_train)
-    tau_percentile = 100.0 * (1.0 - seq_fpr)
-    tau_seq = float(np.percentile(train_scores, tau_percentile))
-    
-    logger.debug(f"Evaluation complete for nu={nu} | AUC: {auc:.4f} | tau_seq: {tau_seq:.4f}")
+    logger.debug(f"Evaluation complete for nu={nu} | AUC: {auc:.4f}")
     
     return {
         "nu": nu,
@@ -59,21 +53,41 @@ def evaluate_novelty_detector(
         "report_str": report_str,
         "predictions": predictions,
         "anomaly_scores": anomaly_scores,
-        "tau_seq": tau_seq
     }
 
 
-def compute_patient_score(seq_scores, tau_seq: float) -> float:
-    """
-    Computes the proportion of sequences that exceed the sequence-level threshold tau_seq.
-    """
-    inverted_scores = -np.asarray(seq_scores)
-    return float(np.mean(inverted_scores > tau_seq))
+def _short_patient_name(filename: str) -> str:
+    """Shorten filename (e.g. Colo_6_merged_subset_1200000.fa -> Colo_6)."""
+    parts = filename.split("_")
+    return f"{parts[0]}_{parts[1]}" if len(parts) >= 2 else filename
 
 
-def evaluate_patient_level_novelty(anomaly_scores, test_files_info, tau_seq: float, logger):
+def _patient_sort_key(name: str):
+    """Sort key: healthy patients first, then by number."""
+    prefix = 0 if name.lower().startswith("healthy") else 1
+    match = re.search(r"(\d+)", name)
+    num = int(match.group(1)) if match else float("inf")
+    return (prefix, num)
+
+
+def evaluate_patient_level_novelty(anomaly_scores, test_files_info, logger, plot_dir: str = None, seed: int = 42):
+    """
+    Aggregates sequence-level anomaly scores to patient level using mean
+    and optionally generates per-patient KDE distribution plots.
+
+    Parameters
+    ----------
+    anomaly_scores : np.ndarray
+        Raw decision_function output from OC-SVM (lower = more anomalous).
+    test_files_info : list of dict
+        Each dict has keys: 'num_sequences', 'label', 'filename'.
+    logger : logging.Logger
+    plot_dir : str, optional
+        If set, generates per-patient KDE plots and a combined overlay.
+    """
     patient_y_true = []
     patient_scores = []
+    per_patient_data = []
     current_idx = 0
 
     logger.info("\n--- Patient-Level Anomaly Aggregation ---")
@@ -83,14 +97,133 @@ def evaluate_patient_level_novelty(anomaly_scores, test_files_info, tau_seq: flo
         seq_scores = anomaly_scores[current_idx: current_idx + num_seqs]
         current_idx += num_seqs
 
-        patient_score = compute_patient_score(seq_scores, tau_seq)
+        # Invert so higher = more anomalous
+        inverted = -np.asarray(seq_scores)
+        patient_score = float(np.mean(inverted))
 
         patient_y_true.append(info['label'])
         patient_scores.append(patient_score)
 
+        short_name = _short_patient_name(info['filename'])
+        per_patient_data.append({
+            'short_name': short_name,
+            'label': info['label'],
+            'inverted_scores': inverted,
+            'mean_score': patient_score,
+        })
+
         status = "TUMOR" if info['label'] == -1 else "HEALTHY"
-        logger.info(f"[{status}] {info['filename']} -> Outlier Proportion: {patient_score:.4%}")
+        logger.info(f"[{status}] {short_name} -> Mean Anomaly Score: {patient_score:.4f}")
 
     patient_auc = roc_auc_score(np.array(patient_y_true) == -1, patient_scores)
+
+    # --- Generate plots ---
+    if plot_dir is not None:
+        _generate_score_distribution_plots(per_patient_data, plot_dir, logger, seed)
+
     return patient_auc
-    
+
+
+def _generate_score_distribution_plots(per_patient_data, plot_dir, logger, seed):
+    """
+    Generates:
+      1. One KDE plot per patient (individual score vs Leave-One-Out Healthy Baseline)
+      2. One combined overlay (all healthy vs all tumor)
+    """
+    import os
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from scipy.stats import gaussian_kde
+
+    os.makedirs(plot_dir, exist_ok=True)
+    per_patient_dir = os.path.join(plot_dir, "per_patient")
+    os.makedirs(per_patient_dir, exist_ok=True)
+
+    # Sort: healthy first, then tumor
+    sorted_data = sorted(per_patient_data, key=lambda d: _patient_sort_key(d['short_name']))
+
+    # --- 1. Per-patient KDE plots with Leave-One-Out Baseline ---
+    for pdata in sorted_data:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        scores = pdata['inverted_scores']
+        is_tumor = (pdata['label'] == -1)
+        
+        # Build the Leave-One-Out healthy baseline
+        # Include all healthy patients EXCEPT the current one (if it's healthy)
+        bg_arrays = [
+            d['inverted_scores'] for d in sorted_data
+            if d['label'] != -1 and d['short_name'] != pdata['short_name']
+        ]
+        
+        x_min, x_max = scores.min(), scores.max()
+        
+        if bg_arrays:
+            bg_all = np.concatenate(bg_arrays)
+            x_min = min(x_min, bg_all.min())
+            x_max = max(x_max, bg_all.max())
+            x_grid = np.linspace(x_min, x_max, 500)
+            
+            # Plot background baseline
+            ax.hist(bg_all, bins=100, density=True, alpha=0.3, color='gray', edgecolor='none', label='Healthy Baseline (Others)')
+            if len(bg_all) > 2 and np.ptp(bg_all) > 0:
+                kde_bg = gaussian_kde(bg_all)
+                ax.plot(x_grid, kde_bg(x_grid), color='dimgray', linewidth=1.5, linestyle='--', label='Baseline KDE')
+        else:
+            x_grid = np.linspace(x_min, x_max, 500)
+
+        # Plot the patient
+        patient_color = 'red' if is_tumor else 'green'
+        patient_hist_color = 'lightcoral' if is_tumor else 'lightgreen'
+        
+        ax.hist(scores, bins=100, density=True, alpha=0.5, color=patient_hist_color, edgecolor='none', label='Patient Reads')
+
+        if len(scores) > 2 and np.ptp(scores) > 0:
+            kde_p = gaussian_kde(scores)
+            ax.plot(x_grid, kde_p(x_grid), color=patient_color, linewidth=2.0, label='Patient KDE')
+
+        status = "TUMOR" if is_tumor else "HEALTHY"
+        ax.set_title(f"{pdata['short_name']} [{status}] vs Baseline — Mean Score: {pdata['mean_score']:.4f}", color=patient_color)
+        ax.set_xlabel("Anomaly Score (Higher = More Anomalous)")
+        ax.set_ylabel("Density")
+        if ax.get_legend_handles_labels()[1]:
+            ax.legend()
+        fig.tight_layout()
+
+        safe_name = re.sub(r"[^\w\-.]", "_", pdata['short_name'])
+        path = os.path.join(per_patient_dir, f"{safe_name}_score_distribution_seed{seed}.pdf")
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+        logger.info(f"  Saved per-patient plot: {path}")
+
+    # --- 2. Combined overlay: All Healthy vs All Tumor ---
+    healthy_all = np.concatenate([d['inverted_scores'] for d in sorted_data if d['label'] != -1])
+    tumor_all = np.concatenate([d['inverted_scores'] for d in sorted_data if d['label'] == -1])
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    ax.hist(healthy_all, bins=100, density=True, alpha=0.3, color='blue', edgecolor='none', label='All Healthy Reads')
+    ax.hist(tumor_all, bins=100, density=True, alpha=0.3, color='red', edgecolor='none', label='All Tumor Reads')
+
+    if len(healthy_all) > 2 and np.ptp(healthy_all) > 0:
+        kde_h = gaussian_kde(healthy_all)
+        x_min = min(healthy_all.min(), tumor_all.min())
+        x_max = max(healthy_all.max(), tumor_all.max())
+        x_grid = np.linspace(x_min, x_max, 500)
+        ax.plot(x_grid, kde_h(x_grid), color='blue', linewidth=2.0, label='Healthy KDE')
+
+    if len(tumor_all) > 2 and np.ptp(tumor_all) > 0:
+        kde_t = gaussian_kde(tumor_all)
+        x_grid = np.linspace(x_min, x_max, 500)
+        ax.plot(x_grid, kde_t(x_grid), color='red', linewidth=2.0, label='Tumor KDE')
+
+    ax.set_title("Distribution of Sequence Anomaly Scores: All Healthy vs All Tumor")
+    ax.set_xlabel("Anomaly Score (Higher = More Anomalous)")
+    ax.set_ylabel("Density")
+    ax.legend()
+    fig.tight_layout()
+
+    path = os.path.join(plot_dir, f"healthy_vs_tumor_overlay_seed{seed}.pdf")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    logger.info(f"  Saved combined overlay plot: {path}")
