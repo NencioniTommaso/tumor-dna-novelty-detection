@@ -18,8 +18,8 @@ sys.path.append(project_root)
 
 from src.data_utils import load_train_cohort_only
 from src.kernels import generate_mkl_weights, mixed_string_kernel, normalize_gram
-from src.evaluation_oa import compute_reference_kde
-from src.reference_io import save_reference
+from src.oa.evaluation_oa import compute_reference_kde
+from src.oa.reference_io import save_reference
 from experiments.experiments_utils import (
     setup_logger,
     create_base_parser,
