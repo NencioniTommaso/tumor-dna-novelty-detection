@@ -23,8 +23,8 @@ from experiments.experiments_utils import (
     add_sample_size_arg,
     add_cache_dir_arg,
 )
-from src.data_utils import MMapFastaReader
-from src.kernels import compute_asymmetric_normalized_kernel, ensure_mkl_weights
+from src.fasta_reader import MMapFastaReader
+from src.gram import compute_asymmetric_normalized_kernel, ensure_mkl_weights
 from src.model_io import load_svm_model
 
 logger = setup_logger(__name__)
@@ -41,10 +41,8 @@ def main():
 
     start_time = time.perf_counter()
 
-    svm, train_sequences, max_k, mismatches, mkl_weights, train_states = load_svm_model(
-        args.model_path
-    )
-    logger.info(f"Loaded SVM trained on {len(train_sequences)} sequences.")
+    artifact = load_svm_model(args.model_path)
+    logger.info(f"Loaded SVM trained on {len(artifact.train_sequences)} sequences.")
 
     logger.info(f"Loading patient data from {os.path.basename(args.patient_file)}...")
     reader = MMapFastaReader(args.patient_file, index_cache_dir=args.cache_dir)
@@ -58,20 +56,20 @@ def main():
     logger.info(f"Computing asymmetric inference kernel for {len(new_patient_sequences)} sequences...")
 
     # Backward compatibility for models saved before MKL weights were serialized.
-    if mkl_weights is None:
-        logger.info("No saved MKL weights found in model artifact; recomputing for compatibility.")
-    mkl_weights = ensure_mkl_weights(max_k, mismatches, mkl_weights)
+    mkl_weights = ensure_mkl_weights(artifact.max_k, artifact.mismatches, artifact.mkl_weights)
+    if artifact.mkl_weights is None:
+        logger.info("No saved MKL weights found in model artifact; recomputed for compatibility.")
 
     K_test = compute_asymmetric_normalized_kernel(
         test_seqs=new_patient_sequences,
-        train_states=train_states,
-        max_k=max_k,
-        mismatches=mismatches,
+        train_states=artifact.train_states,
+        max_k=artifact.max_k,
+        mismatches=artifact.mismatches,
         mkl_weights=mkl_weights,
     )
 
     logger.info("Predicting sequence anomalies...")
-    anomaly_scores = svm.decision_function(K_test)
+    anomaly_scores = artifact.model.decision_function(K_test)
 
     # Invert so higher = more anomalous
     inverted_scores = -anomaly_scores

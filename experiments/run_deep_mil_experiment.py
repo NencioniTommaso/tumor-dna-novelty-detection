@@ -68,14 +68,13 @@ def main():
         args.max_test_tumor,
         args.seed,
         args.cache_dir,
-        logger
     )
     
     # --- 3. Deep Kernel Computation ---
     start_time = time.time()
     
     # Lazy import to avoid slow PyTorch/Transformers initialization during --help
-    from src.DNAFeatureExtractor import compute_train_test_kernels
+    from src.dna_feature_extractor import compute_train_test_kernels
 
     # K_train is (Train vs Train), K_test is (Test vs Train)
     K_train, K_test = compute_train_test_kernels(
@@ -95,17 +94,16 @@ def main():
         nu=args.nu_param,
     )
     
-    final_plot_dir = None
-    if args.plot_dir:
-        final_plot_dir = os.path.join(args.plot_dir, "deep_mil")
-        
-    patient_auc = evaluate_patient_level_novelty(
+    patient_auc, per_patient_data = evaluate_patient_level_novelty(
         metrics['anomaly_scores'], 
         test_files_info, 
-        logger, 
-        plot_dir=final_plot_dir,
-        seed=args.seed
     )
+    
+    # --- Optional: Generate Score Distribution Plots ---
+    if args.plot_dir:
+        from src.plotting import generate_score_distribution_plots
+        final_plot_dir = os.path.join(args.plot_dir, "deep_mil")
+        generate_score_distribution_plots(per_patient_data, final_plot_dir, args.seed)
     
     elapsed = time.time() - start_time
     

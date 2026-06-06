@@ -7,25 +7,16 @@ Run this using: pytest tests/src/test_kernels.py -v
 import numpy as np
 import pytest
 
-# Adjust import path if necessary based on your project structure
-from src.kernels import (
-    generate_mismatch_neighborhood,
-    mismatch_analyzer,
-    extract_features,
+from src.mismatch import generate_mismatch_neighborhood
+from src.features import mismatch_analyzer, extract_features
+from src.gram import (
     _extract_and_compute_gram_k_symmetric,
     compute_asymmetric_normalized_kernel,
     mixed_string_kernel,
-    normalize_gram
+    normalize_gram,
 )
 
-# --- FIXTURES ---
-@pytest.fixture
-def sample_sequences():
-    return ["ATGCATGC", "GCATGCAT", "AAAAAA", "TTTTTT"]
-
-@pytest.fixture
-def custom_alphabet():
-    return ('A', 'C', 'G', 'T', 'M')
+# Fixtures (sample_sequences, custom_alphabet) are defined in tests/conftest.py
 
 # --- 1. UNIT TESTS: NEIGHBORHOOD GENERATION ---
 

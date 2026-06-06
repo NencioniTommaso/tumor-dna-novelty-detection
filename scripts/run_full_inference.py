@@ -25,7 +25,7 @@ from experiments.experiments_utils import (
     validate_files_exist,
 )
 from src.data_utils import load_tracked_patient_cohort
-from src.kernels import compute_asymmetric_normalized_kernel, ensure_mkl_weights
+from src.gram import compute_asymmetric_normalized_kernel, ensure_mkl_weights
 from src.evaluation import evaluate_patient_level_novelty
 from src.model_io import load_svm_model
 
@@ -63,40 +63,38 @@ def main():
         args.max_test_tumor,
         args.seed,
         args.cache_dir,
-        logger
     )
 
     model_path = os.path.join(project_root, "models", args.model_name)
     logger.info(f"\nLoading saved SVM model from {model_path}...")
-    svm, _, max_k, mismatches, mkl_weights, train_states = load_svm_model(model_path)
-    mkl_weights = ensure_mkl_weights(max_k, mismatches, mkl_weights)
+    artifact = load_svm_model(model_path)
+    mkl_weights = ensure_mkl_weights(artifact.max_k, artifact.mismatches, artifact.mkl_weights)
 
     start_time = time.time()
     
     logger.info("\nComputing Asymmetric Kernel for Testing...")
     K_test = compute_asymmetric_normalized_kernel(
         test_seqs=test_data,
-        train_states=train_states,
-        max_k=max_k,
-        mismatches=mismatches,
+        train_states=artifact.train_states,
+        max_k=artifact.max_k,
+        mismatches=artifact.mismatches,
         mkl_weights=mkl_weights,
         n_jobs=args.n_jobs
     )
 
     logger.info("\nPredicting sequence anomalies...")
-    anomaly_scores = svm.decision_function(K_test)
+    anomaly_scores = artifact.model.decision_function(K_test)
     
-    final_plot_dir = None
-    if args.plot_dir:
-        final_plot_dir = os.path.join(args.plot_dir, f"m_{mismatches}", f"k_{max_k}")
-
-    patient_auc = evaluate_patient_level_novelty(
+    patient_auc, per_patient_data = evaluate_patient_level_novelty(
         anomaly_scores, 
         test_files_info, 
-        logger, 
-        plot_dir=final_plot_dir,
-        seed=args.seed
     )
+    
+    # --- Optional: Generate Score Distribution Plots ---
+    if args.plot_dir:
+        from src.plotting import generate_score_distribution_plots
+        final_plot_dir = os.path.join(args.plot_dir, f"m_{artifact.mismatches}", f"k_{artifact.max_k}")
+        generate_score_distribution_plots(per_patient_data, final_plot_dir, args.seed)
     
     elapsed = time.time() - start_time
     logger.info(f"\nTotal Inference Execution Time: {elapsed:.2f} seconds")

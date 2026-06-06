@@ -15,7 +15,7 @@ sys.path.append(project_root)
 
 # Import from our custom library
 from src.data_utils import load_tracked_patient_cohort
-from src.kernels import generate_mkl_weights, mixed_string_kernel, normalize_gram, compute_asymmetric_normalized_kernel
+from src.gram import generate_mkl_weights, mixed_string_kernel, normalize_gram, compute_asymmetric_normalized_kernel
 from src.evaluation import evaluate_novelty_detector, evaluate_patient_level_novelty
 from experiments.experiments_utils import (
     setup_logger,
@@ -71,7 +71,6 @@ def main():
         args.max_test_tumor,
         args.seed,
         args.cache_dir,
-        logger
     )
     
     # --- 3. Kernel Computation (Train) ---
@@ -113,17 +112,16 @@ def main():
     )
     
     # --- 5. True Patient-Level Anomaly Aggregation ---
-    final_plot_dir = None
-    if args.plot_dir:
-        final_plot_dir = os.path.join(args.plot_dir, f"m_{args.mismatches}", f"k_{args.max_k}")
-        
-    patient_auc = evaluate_patient_level_novelty(
+    patient_auc, per_patient_data = evaluate_patient_level_novelty(
         metrics['anomaly_scores'], 
         test_files_info, 
-        logger, 
-        plot_dir=final_plot_dir,
-        seed=args.seed,
     )
+    
+    # --- Optional: Generate Score Distribution Plots ---
+    if args.plot_dir:
+        from src.plotting import generate_score_distribution_plots
+        final_plot_dir = os.path.join(args.plot_dir, f"m_{args.mismatches}", f"k_{args.max_k}")
+        generate_score_distribution_plots(per_patient_data, final_plot_dir, args.seed)
     
     elapsed = time.time() - start_time
     

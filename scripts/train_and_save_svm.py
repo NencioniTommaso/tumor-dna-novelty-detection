@@ -15,8 +15,8 @@ project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 
 from src.data_utils import load_tracked_patient_cohort
-from src.kernels import generate_mkl_weights, mixed_string_kernel, normalize_gram
-from src.model_io import save_svm_model
+from src.gram import generate_mkl_weights, mixed_string_kernel, normalize_gram
+from src.model_io import save_svm_model, ModelArtifact
 from experiments.experiments_utils import (
     setup_logger,
     create_base_parser,
@@ -54,7 +54,7 @@ def main():
     # 2. Load Data (Pass empty lists for the test sets)
     logger.info("Loading training cohort...")
     train_data, _, _, _ = load_tracked_patient_cohort(
-        train_normal_files, [], [], args.max_train, 0, 0, args.seed, args.cache_dir, logger
+        train_normal_files, [], [], args.max_train, 0, 0, args.seed, args.cache_dir
     )
 
     start_time = time.perf_counter()
@@ -82,16 +82,16 @@ def main():
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, args.model_name)
 
-    save_svm_model(
-        svm=svm,
+    artifact = ModelArtifact(
+        model=svm,
         train_sequences=train_data,
         max_k=args.max_k,
         mismatches=args.mismatches,
         nu_param=args.nu_param,
         mkl_weights=mkl_weights,
-        save_path=save_path,
         train_states=train_states,
     )
+    save_svm_model(artifact, save_path)
 
     elapsed = time.perf_counter() - start_time
     logger.info(f"Training time: {elapsed:.2f} seconds")
