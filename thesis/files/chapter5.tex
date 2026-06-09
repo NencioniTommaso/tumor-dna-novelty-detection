@@ -1,0 +1,29 @@
+\chapter{Experiments}\label{ch:experiments}
+
+\section{Experimental Protocol}\label{sec:protocol}
+% Describe the overall objective of the experiments.
+% The use of Leave-One-Out Cross-Validation (LOO-CV) over the healthy cohort.
+% Why LOO-CV is appropriate given the limited number of independent healthy
+% donors (patients Healthy_2 through Healthy_7).
+
+\section{Leave-One-Out Cross-Validation Scheme}\label{sec:loo-cv}
+% Detail the fold construction:
+% - In each fold, hold out one healthy patient as the "test normal".
+% - Train the OC-SVM on the remaining 5 healthy patients.
+% - Evaluate the model on the held-out healthy patient and one tumour patient.
+% - Repeat for each tumour patient (Colo_11, Colo_12, Colo_13) across all folds.
+% Ensures that the test healthy patient is strictly unseen during training.
+
+\section{Hyperparameter Selection}\label{sec:hyperparameters}
+% Explain the fixed choices or search grid:
+% - Kernel parameters: maximum k-mer size ($k_{max}$), allowed mismatches ($m$),
+%   mismatch decay factor ($\lambda$).
+% - MKL noise threshold.
+% - OC-SVM hyperparameter: $\nu$ (expected anomaly rate).
+% Mention the computational constraints that informed these choices.
+
+\section{Implementation Details}\label{sec:experiment-details}
+% Hardware used (e.g. CPU cores, memory limits).
+% Sample sizes per patient (e.g. 18,000 for training, 1,500 for testing) to
+% maintain manageable Gram matrix dimensions.
+% Seeding and reproducibility.

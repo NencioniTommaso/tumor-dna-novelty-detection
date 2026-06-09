@@ -1,0 +1,29 @@
+\chapter{Data}\label{ch:data}
+
+\section{Data Origin}\label{sec:data-origin}
+% Describe the source of the sequencing data:
+% - Sequencing platform and protocol (e.g. whole-genome bisulfite sequencing)
+% - Cohort composition: healthy donors (Healthy_2 through Healthy_7) and
+%   colon cancer patients (Colo_11, Colo_12, Colo_13)
+% - How samples were collected (liquid biopsy vs tissue) and processed
+
+\section{DNA Sequences and Read Structure}\label{sec:read-structure}
+% Format of the data: FASTA files, one read per entry
+% Typical read length, number of reads per patient (e.g. 1.2M subsetted reads)
+% Alphabet: {A, C, G, T, M, H} — the role of bisulfite conversion in producing
+% methylation-aware bases
+
+\section{Expected Signatures}\label{sec:expected-signatures}
+% What we expect to find in the data:
+% - Tumour reads may carry somatic point mutations (C>T transitions, etc.)
+% - Altered methylation landscapes: global hypomethylation, promoter
+%   hypermethylation in tumour suppressor genes
+% - The hypothesis that these differences will manifest as distributional
+%   shifts detectable by a kernel-based novelty detector
+
+\section{Data Preprocessing}\label{sec:preprocessing}
+% Uppercasing, filtering of ambiguous bases
+% Subsampling strategy: random sampling of N reads per patient to control
+%   computational cost while preserving statistical representativeness
+% Memory-mapped FASTA reading (MMapFastaReader) and index caching for
+%   reproducible, fast random access

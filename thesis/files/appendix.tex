@@ -1,0 +1,36 @@
+\appendix
+\chapter{Practical Implementation and Code Structure}\label{ch:implementation}
+
+\section{Repository Overview}\label{sec:repo-overview}
+% High-level description of the project structure:
+% - src/: Core algorithms (features, gram, mismatch, evaluation)
+% - scripts/: CLI entry points for inference
+% - experiments/: Scripts for reproducing LOO and MIL experiments
+% - thesis/: LaTeX source for this document
+
+\section{Core Modules}\label{sec:core-modules}
+
+\subsection{\texttt{mismatch.py}}\label{subsec:code-mismatch}
+% Details the recursive generation of the mismatch neighbourhood using the
+% epigenetic alphabet, heavily leveraging Python's \texttt{itertools} and
+% \texttt{@lru\_cache} for memoisation.
+
+\subsection{\texttt{features.py}}\label{subsec:code-features}
+% Explains the integration with \texttt{scikit-learn}'s \texttt{CountVectorizer}
+% and the parallel chunking logic that returns sparse CSR matrices.
+% Emphasises the stateless design achieved via pre-enumerated vocabularies.
+
+\subsection{\texttt{gram.py}}\label{subsec:code-gram}
+% Describes the MKL weight generation, dense Gram matrix normalisation via
+% NumPy broadcasting, and the block-partitioned multiplication for both
+% symmetric and asymmetric matrices.
+
+\subsection{\texttt{evaluation.py} and \texttt{plotting.py}}\label{subsec:code-eval}
+% Outlines the OC-SVM fitting via \texttt{scikit-learn}, sequence-to-patient
+% score aggregation, and the decoupling of computation from matplotlib
+% plotting logic.
+
+\section{Reproducing the Experiments}\label{sec:reproduction}
+% Command-line instructions on how to run the pipeline.
+% Example: python experiments/run_loo_experiment.py --data-dir path/to/data --tumor-file path/to/tumor.fa
+% Mention the role of the seed argument to ensure exact reproducibility.

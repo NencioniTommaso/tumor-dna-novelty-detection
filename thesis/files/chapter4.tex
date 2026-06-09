@@ -1,0 +1,41 @@
+\chapter{Novelty Detection}\label{ch:novelty}
+
+\section{Problem Formulation}\label{sec:novelty-formulation}
+% Formal definition: given a training set $\{x_1, \ldots, x_n\}$ drawn from the
+% ``normal'' distribution $P$, learn a decision function $f$ such that $f(x) > 0$
+% for most of $P$ and $f(x) < 0$ for points outside the support of $P$.
+%
+% Distinction from binary classification and from outlier detection (transductive
+% vs inductive setting).
+
+\section{One-Class Support Vector Machine}\label{sec:ocsvm}
+
+\subsection{Formulation}\label{sec:ocsvm-formulation}
+% The OC-SVM of Schölkopf et al. (2001):
+% Separate data from the origin in feature space with maximum margin.
+% Primal problem: $\min_{w, \rho, \xi} \frac{1}{2}\|w\|^2 - \rho + \frac{1}{\nu n} \sum_i \xi_i$
+% subject to $\langle w, \Phi(x_i) \rangle \geq \rho - \xi_i$, $\xi_i \geq 0$.
+%
+% The $\nu$ parameter: upper bound on the fraction of outliers and lower bound
+% on the fraction of support vectors.
+
+\subsection{Decision Function and Anomaly Scores}\label{sec:decision-function}
+% $f(x) = \langle w, \Phi(x) \rangle - \rho = \sum_i \alpha_i K(x_i, x) - \rho$
+% Anomaly score: $s(x) = -f(x)$, so higher values indicate greater anomaly.
+%
+% Using a precomputed kernel matrix: sklearn's OneClassSVM with kernel='precomputed'.
+
+\section{Patient-Level Aggregation: Multiple Instance Learning}\label{sec:mil}
+% Each patient is a ``bag'' of DNA reads (instances).
+% Patient-level score = mean of read-level anomaly scores.
+% Justification: in a tumour patient, only a fraction of cfDNA is tumour-derived;
+% the mean score captures the overall shift in the distribution.
+%
+% Alternative aggregation strategies (max, quantile) and why mean is appropriate
+% given the high number of instances.
+
+\section{Evaluation Metrics}\label{sec:metrics}
+% Patient-level ROC-AUC as the primary metric.
+% Sequence-level ROC-AUC (expected to be noisy due to label ambiguity at the
+% read level --- healthy reads in a tumour patient are labelled as ``tumour'').
+% Score distribution plots (KDE) for qualitative assessment.

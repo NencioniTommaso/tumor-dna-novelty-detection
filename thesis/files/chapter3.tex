@@ -1,0 +1,79 @@
+\chapter{The Mismatch String Kernel}\label{ch:kernel}
+
+\section{Kernel Methods: A Brief Introduction}\label{sec:kernel-intro}
+
+% Definition of a kernel function: $K(x, x') = \langle \Phi(x), \Phi(x') \rangle_{\mathcal{H}}$
+% The kernel trick: computing inner products in a high-dimensional feature space
+% without explicitly constructing the feature map $\Phi$.
+% Mercer's theorem and the characterisation of valid (positive semi-definite) kernels.
+% Why kernels are well-suited for structured data (strings, graphs, sets).
+
+\section{String Kernels}\label{sec:string-kernels}
+
+\subsection{The Spectrum Kernel}\label{sec:spectrum}
+% The $k$-spectrum kernel (Leslie et al., 2002):
+% $\Phi_k(x) = (\phi_\alpha(x))_{\alpha \in \Sigma^k}$, where $\phi_\alpha(x)$
+% counts the number of occurrences of $k$-mer $\alpha$ in string $x$.
+% Limitations: exact matching only, sensitive to single-nucleotide variations.
+
+\subsection{The Mismatch Kernel}\label{sec:mismatch-kernel}
+% The $(k, m)$-mismatch kernel (Leslie et al., 2004):
+% For each observed $k$-mer, increment the count of all $k$-mers within Hamming
+% distance $m$ from it. This neighbourhood expansion makes the kernel robust
+% to substitutions.
+%
+% Formal definition:
+% $N(k, m)(\alpha) = \{ \beta \in \Sigma^k : d_H(\alpha, \beta) \leq m \}$
+% $\Phi_{k,m}(x) = \sum_{i=1}^{|x|-k+1} \mathbf{1}_{N(k,m)(x[i:i+k])}$
+%
+% Alphabet: the extended 6-letter epigenetic alphabet $\Sigma = \{A, C, G, T, M, H\}$
+
+\subsection{Weighted Mismatch Neighbourhood}\label{sec:weighted-mismatch}
+% Extension used in this work: instead of binary neighbourhood membership,
+% each neighbour at Hamming distance $d$ contributes weight $\lambda^d$
+% where $\lambda \in [0, 1]$ is a decay factor (mismatch\_decay).
+% This gives higher importance to exact matches and near-matches.
+
+\section{Multiple Kernel Learning}\label{sec:mkl}
+% Combining kernels across multiple values of $k$:
+% $K_{\text{MKL}}(x, x') = \sum_{k=k_{\min}}^{k_{\max}} w_k \, K_k(x, x')$
+% Weight generation strategy: linear ramp with noise suppression for short $k$-mers.
+
+\section{Gram Matrix Computation}\label{sec:gram}
+
+\subsection{Symmetric Gram Matrix (Training)}\label{sec:gram-symmetric}
+% $K_{ij} = \langle \Phi(x_i), \Phi(x_j) \rangle$ for all pairs in the training set.
+% Exploiting symmetry: only computing the upper triangle.
+% Kernel normalisation: $\hat{K}_{ij} = K_{ij} / \sqrt{K_{ii} K_{jj}}$
+
+\subsection{Asymmetric Gram Matrix (Inference)}\label{sec:gram-asymmetric}
+% At test time we need $K_{\text{test}}[i, j] = \langle \Phi(x_i^{\text{test}}), \Phi(x_j^{\text{train}}) \rangle$.
+% Proper normalisation requires the test self-norms $K^{\text{test}}_{ii}$, which
+% differ from training norms. Describe the vocabulary alignment issue and the
+% full-vocabulary optimisation.
+
+\section{Algorithmic Optimisations}\label{sec:optimisations}
+
+\subsection{Sparse Feature Representation}\label{sec:sparse}
+% For large $k$ and small $m$, the feature vectors are extremely sparse.
+% Using scipy.sparse CSR matrices reduces memory and enables fast dot products.
+
+\subsection{LRU-Cached Neighbourhood Generation}\label{sec:lru-cache}
+% The function \texttt{generate\_mismatch\_neighborhood} is decorated with
+% \texttt{@lru\_cache}: the same $k$-mer neighbourhood is never recomputed.
+
+\subsection{Pre-Enumerated Vocabulary}\label{sec:vocab}
+% \texttt{build\_full\_vocabulary} generates all $|\Sigma|^k$ possible $k$-mers
+% deterministically, allowing parallel chunks to operate with no shared mutable
+% state and guaranteeing consistent column indices.
+
+\subsection{Block-Partitioned Matrix Multiplication}\label{sec:block-parallel}
+% For large $N$, the Gram matrix is tiled into blocks of size $B \times B$.
+% Each block $K[r_s:r_e, c_s:c_e] = X[r_s:r_e] \cdot X[c_s:c_e]^T$ is
+% computed independently via joblib, avoiding materialisation of a single
+% dense $N \times N$ product.
+
+\subsection{BLAS Thread Pinning}\label{sec:blas}
+% Setting \texttt{OMP\_NUM\_THREADS=1} and equivalent variables before parallel
+% kernel computation prevents hidden thread contention between joblib workers
+% and the underlying BLAS implementation.

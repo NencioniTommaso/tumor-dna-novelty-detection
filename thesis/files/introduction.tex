@@ -1,3 +1,60 @@
-\chapter{Introduzione}\label{ch:introduzione}
-\ldots
-\cite{gruntzig1978transluminal}
+\chapter{Introduction}\label{ch:introduction}
+
+\section{Motivation}\label{sec:motivation}
+
+Colorectal cancer (CRC) is the third most common cancer globally, accounting for
+approximately 10\% of all cancer diagnoses and the second leading cause of
+cancer-related mortality~\cite{sung2021global}. Despite significant advances in
+treatment, prognosis remains heavily dependent on the stage at which the disease
+is detected. Tumours identified at an early, localised stage have five-year
+survival rates exceeding 90\%, whereas metastatic disease drops below
+15\%~\cite{siegel2020colorectal}. This stark contrast underscores the urgent
+need for reliable, non-invasive early-detection strategies.
+
+Traditional screening methods --- such as colonoscopy and faecal occult blood
+tests --- suffer from low patient compliance, invasiveness, or limited
+sensitivity. \emph{Liquid biopsy}, the analysis of circulating cell-free DNA
+(cfDNA) fragments shed into the bloodstream by dying cells, has emerged as a
+promising alternative. In cancer patients, a fraction of cfDNA originates from
+tumour cells and carries somatic mutations as well as aberrant methylation
+patterns. Detecting these tumour-derived fragments against the overwhelming
+background of normal cfDNA is, however, a needle-in-a-haystack problem that
+demands highly sensitive computational methods.
+
+\section{Why Novelty Detection?}\label{sec:why-novelty}
+
+A natural framing of this problem is \emph{novelty detection}: we learn a model
+of ``normality'' from healthy donor DNA and then flag test reads that deviate
+significantly from the learned distribution. This one-class formulation is
+attractive because it requires no labelled tumour samples for training, side-stepping
+the chronic scarcity of annotated cancer genomic data and avoiding biases towards
+specific mutation signatures.
+
+\section{Thesis Outline}\label{sec:outline}
+
+The remainder of this thesis is organised as follows.
+
+\begin{itemize}
+    \item \textbf{Chapter~\ref{ch:background}} reviews the biological background
+          of cfDNA and epigenetic modifications, surveys prior work on
+          machine-learning approaches to cancer detection from sequencing data,
+          and positions the mismatch kernel method within this landscape.
+    \item \textbf{Chapter~\ref{ch:data}} describes the origin, pre-processing,
+          and characteristics of the DNA sequence data used in this study.
+    \item \textbf{Chapter~\ref{ch:kernel}} provides the mathematical foundations
+          of kernel methods and develops the mismatch string kernel in detail,
+          including algorithmic optimisations adopted in the implementation.
+    \item \textbf{Chapter~\ref{ch:novelty}} introduces the novelty detection
+          framework, focusing on the One-Class SVM and the patient-level
+          Multiple Instance Learning aggregation.
+    \item \textbf{Chapter~\ref{ch:experiments}} details the experimental
+          protocol, including the Leave-One-Out cross-validation scheme and
+          evaluation metrics.
+    \item \textbf{Chapter~\ref{ch:results}} presents and discusses the
+          experimental results.
+    \item \textbf{Chapter~\ref{ch:conclusions}} summarises the contributions and
+          outlines directions for future work.
+    \item \textbf{Appendix~\ref{ch:implementation}} provides a practical guide
+          to the software implementation, covering repository structure, key
+          modules, and instructions for reproduction.
+\end{itemize}

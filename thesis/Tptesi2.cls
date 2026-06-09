@@ -42,7 +42,7 @@
 %
 \LoadClass[\@tipo,a4paper,1\@ptoption]{book}
 % The babel package is required for italian.
-\RequirePackage[italian]{babel}
+\RequirePackage[english]{babel}
 % The amsmath package is required for good-looking formulas.
 \RequirePackage[reqno]{amsmath}
 % The graphicx package is required for inserting the University

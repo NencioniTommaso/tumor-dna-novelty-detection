@@ -1,0 +1,34 @@
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+
+Colorectal cancer is among the most prevalent and deadly malignancies worldwide.
+Early detection of somatic mutations in cell-free DNA (cfDNA) holds the promise
+of non-invasive screening, yet distinguishing tumour-derived fragments from the
+overwhelming background of healthy DNA remains a formidable challenge.
+
+This thesis investigates a novelty detection approach based on string kernels
+applied to short DNA reads. We represent each read in a high-dimensional feature
+space induced by the \emph{mismatch string kernel}, which counts all $k$-mers
+within a specified Hamming distance of the observed subsequences. An extended
+six-letter epigenetic alphabet --- incorporating 5-methylcytosine (M) and
+5-hydroxymethylcytosine (H) alongside the canonical bases --- enables the kernel
+to capture methylation signatures that are known to be altered in cancer.
+
+A One-Class Support Vector Machine (OC-SVM) is trained exclusively on reads from
+healthy donors to learn a decision boundary that encloses the ``normal'' region
+of the kernel-induced feature space. At inference time, each read from a test
+patient receives an anomaly score; these scores are then aggregated at the
+patient level following a Multiple Instance Learning (MIL) paradigm, treating
+every patient as a \emph{bag} of read-level instances.
+
+We evaluate the pipeline through a rigorous Leave-One-Out cross-validation
+protocol over a cohort of healthy and colon-cancer patients, reporting
+patient-level ROC-AUC as the primary metric. Experimental results demonstrate
+that the mismatch kernel, combined with distance-weighted neighbourhood
+expansion and Multiple Kernel Learning (MKL), yields a strong separation between
+healthy and tumour patients across multiple random seeds.
+
+The entire pipeline --- from memory-mapped FASTA parsing and parallel sparse
+feature extraction to block-partitioned Gram matrix computation --- is
+implemented in Python with an emphasis on computational efficiency and
+reproducibility.
