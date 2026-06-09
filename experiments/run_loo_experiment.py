@@ -251,7 +251,7 @@ def main():
             f"m_{args.mismatches}", f"k_{args.max_k}", tumor_subject,
         )
         os.makedirs(subject_dir, exist_ok=True)
-        csv_path = os.path.join(subject_dir, "loo_results.csv")
+        csv_path = os.path.join(subject_dir, f"loo_results_seed{args.seed}.csv")
     save_loo_results(results, csv_path)
 
 
