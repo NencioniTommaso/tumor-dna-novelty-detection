@@ -133,3 +133,72 @@ def generate_score_distribution_plots(per_patient_data, plot_dir, seed):
     fig.savefig(path, dpi=150)
     plt.close(fig)
     logger.info(f"  Saved combined overlay plot: {path}")
+
+
+def generate_loo_fold_plot(per_patient_data, plot_dir, fold_name, seed):
+    """Generate a single overlay plot for one LOO fold.
+
+    Shows the score distributions of the held-out healthy patient and
+    the tumor patient side by side — no baseline since only one healthy
+    patient is in the test set.
+
+    Parameters
+    ----------
+    per_patient_data : list of dict
+        Each dict has keys: 'short_name', 'label', 'inverted_scores', 'mean_score'.
+        Expected to contain exactly 2 entries (1 healthy, 1 tumor).
+    plot_dir : str
+        Output directory for the plot.
+    fold_name : str
+        Fold identifier (e.g. ``"LOO_Healthy_3"``), embedded in the filename.
+    seed : int
+        Random seed used in the experiment.
+    """
+    os.makedirs(plot_dir, exist_ok=True)
+
+    # Separate healthy and tumor entries
+    healthy = [d for d in per_patient_data if d['label'] != -1]
+    tumor = [d for d in per_patient_data if d['label'] == -1]
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Determine shared x-axis range
+    all_scores = np.concatenate([d['inverted_scores'] for d in per_patient_data])
+    x_min, x_max = all_scores.min(), all_scores.max()
+    x_grid = np.linspace(x_min, x_max, 500)
+
+    # Plot healthy patient(s)
+    for d in healthy:
+        scores = d['inverted_scores']
+        ax.hist(scores, bins=100, density=True, alpha=0.3, color='blue',
+                edgecolor='none', label=f"{d['short_name']} (Healthy)")
+        if len(scores) > 2 and np.ptp(scores) > 0:
+            kde = gaussian_kde(scores)
+            ax.plot(x_grid, kde(x_grid), color='blue', linewidth=2.0,
+                    label=f"{d['short_name']} KDE")
+
+    # Plot tumor patient(s)
+    for d in tumor:
+        scores = d['inverted_scores']
+        ax.hist(scores, bins=100, density=True, alpha=0.3, color='red',
+                edgecolor='none', label=f"{d['short_name']} (Tumor)")
+        if len(scores) > 2 and np.ptp(scores) > 0:
+            kde = gaussian_kde(scores)
+            ax.plot(x_grid, kde(x_grid), color='red', linewidth=2.0,
+                    label=f"{d['short_name']} KDE")
+
+    # Annotate mean scores
+    for d in per_patient_data:
+        color = 'red' if d['label'] == -1 else 'blue'
+        ax.axvline(d['mean_score'], color=color, linestyle=':', alpha=0.7)
+
+    ax.set_title(f"{fold_name}: Held-Out Healthy vs Tumor", fontsize=13)
+    ax.set_xlabel("Anomaly Score (Higher = More Anomalous)")
+    ax.set_ylabel("Density")
+    ax.legend()
+    fig.tight_layout()
+
+    path = os.path.join(plot_dir, f"{fold_name}_overlay_seed{seed}.pdf")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    logger.info(f"  Saved LOO fold plot: {path}")

@@ -207,3 +207,51 @@ def build_all_healthy_files(data_dir: str) -> list[str]:
         os.path.join(data_dir, f"Healthy_{i}_merged_subset_1200000.fa")
         for i in range(2, 8)
     ]
+
+
+def build_loo_folds(data_dir: str, tumor_file: str) -> list[dict]:
+    """Generate Leave-One-Out folds over all 6 healthy patients.
+
+    Each fold holds out one healthy patient for testing and uses the
+    remaining 5 for training.  The single *tumor_file* is included in
+    every fold's test set.
+
+    Returns
+    -------
+    list of dict
+        Each dict contains:
+        - fold_name : str  (e.g. ``"LOO_Healthy_3"``)
+        - train_files : list[str]  (N-1 healthy files)
+        - test_healthy_file : str  (held-out healthy file)
+        - test_tumor_files : list[str]  (single tumor file)
+    """
+    all_healthy = build_all_healthy_files(data_dir)
+    folds = []
+    for idx, held_out in enumerate(all_healthy):
+        train_files = [f for j, f in enumerate(all_healthy) if j != idx]
+        # Derive a human-readable fold name from the filename
+        base = os.path.basename(held_out)          # e.g. Healthy_3_merged_...
+        patient_tag = "_".join(base.split("_")[:2]) # Healthy_3
+        folds.append({
+            "fold_name": f"LOO_{patient_tag}",
+            "train_files": train_files,
+            "test_healthy_file": held_out,
+            "test_tumor_files": [tumor_file],
+        })
+    return folds
+
+
+def add_loo_args(parser: argparse.ArgumentParser) -> None:
+    """Add CLI arguments specific to the LOO experiment."""
+    parser.add_argument(
+        "--tumor-file",
+        type=str,
+        required=True,
+        help="Path to the single tumor patient FASTA file to test in every fold.",
+    )
+    parser.add_argument(
+        "--output-csv",
+        type=str,
+        default=None,
+        help="Path to write the per-fold results CSV (default: results/loo_results.csv).",
+    )
