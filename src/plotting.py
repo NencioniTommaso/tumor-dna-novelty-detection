@@ -97,7 +97,9 @@ def generate_score_distribution_plots(per_patient_data, plot_dir, seed):
         fig.tight_layout()
 
         safe_name = re.sub(r"[^\w\-.]", "_", pdata['short_name'])
-        path = os.path.join(per_patient_dir, f"{safe_name}_score_distribution_seed{seed}.pdf")
+        patient_subdir = os.path.join(per_patient_dir, safe_name)
+        os.makedirs(patient_subdir, exist_ok=True)
+        path = os.path.join(patient_subdir, f"{safe_name}_score_distribution_seed{seed}.pdf")
         fig.savefig(path, dpi=150)
         plt.close(fig)
         logger.info(f"  Saved per-patient plot: {path}")

@@ -137,14 +137,17 @@ def _run_single_fold(fold: dict, args) -> dict:
         test_files_info,
     )
 
-    # --- Per-fold plot ---
+    # --- Per-fold plot (organized by tested tumor subject) ---
     if args.plot_dir:
         from src.plotting import generate_loo_fold_plot
 
+        tumor_base = os.path.basename(fold["test_tumor_files"][0])
+        tumor_subject = "_".join(tumor_base.split("_")[:2])  # e.g. Colo_11
         fold_plot_dir = os.path.join(
             args.plot_dir,
             f"m_{args.mismatches}",
             f"k_{args.max_k}",
+            tumor_subject,
         )
         generate_loo_fold_plot(per_patient_data, fold_plot_dir, fold_name, args.seed)
 
@@ -210,6 +213,10 @@ def main():
     if not validate_files_exist([args.tumor_file], logger):
         sys.exit(1)
 
+    # Derive tested tumor subject name for organizing outputs
+    tumor_base = os.path.basename(args.tumor_file)
+    tumor_subject = "_".join(tumor_base.split("_")[:2])  # e.g. "Colo_11"
+
     # Build the LOO folds
     folds = build_loo_folds(args.data_dir, args.tumor_file)
     logger.info(f"Generated {len(folds)} LOO folds over healthy patients")
@@ -236,12 +243,18 @@ def main():
     print_loo_summary(results, logger)
     logger.info(f"Total LOO Execution Time: {elapsed:.2f} seconds")
 
-    # --- Save CSV ---
+    # --- Save CSV into subject subfolder ---
     csv_path = args.output_csv
     if csv_path is None:
-        csv_path = os.path.join(project_root, "results", "loo_results.csv")
+        subject_dir = os.path.join(
+            project_root, "results", "loo",
+            f"m_{args.mismatches}", f"k_{args.max_k}", tumor_subject,
+        )
+        os.makedirs(subject_dir, exist_ok=True)
+        csv_path = os.path.join(subject_dir, "loo_results.csv")
     save_loo_results(results, csv_path)
 
 
 if __name__ == "__main__":
     main()
+
