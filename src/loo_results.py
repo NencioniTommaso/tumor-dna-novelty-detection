@@ -48,6 +48,43 @@ def save_loo_results(results: List[Dict[str, Any]], output_path: str) -> None:
     logger.info(f"LOO results saved to {output_path}")
 
 
+def save_fold_anomaly_scores(
+    per_patient_data: List[Dict[str, Any]],
+    output_path: str,
+) -> None:
+    """Write per-sequence anomaly scores for both tested subjects to CSV.
+
+    Creates a CSV with two columns — one per tested patient (held-out
+    healthy and tumor).  Column headers are the short patient names
+    (e.g. ``Healthy_2``, ``Colo_15``).
+
+    Parameters
+    ----------
+    per_patient_data : list of dict
+        Exactly two entries (healthy + tumor), each containing at least
+        ``'short_name'`` and ``'inverted_scores'`` (1-D array).
+    output_path : str
+        Destination CSV path.  Parent directories are created if needed.
+    """
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+
+    names = [d["short_name"] for d in per_patient_data]
+    scores = [d["inverted_scores"] for d in per_patient_data]
+    max_len = max(len(s) for s in scores)
+
+    with open(output_path, "w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(names)
+        for i in range(max_len):
+            row = [
+                str(scores[col][i]) if i < len(scores[col]) else ""
+                for col in range(len(scores))
+            ]
+            writer.writerow(row)
+
+    logger.info(f"Fold anomaly scores saved to {output_path}")
+
+
 def print_loo_summary(results: List[Dict[str, Any]], log: logging.Logger) -> None:
     """Print a formatted summary table and aggregate stats to the logger.
 

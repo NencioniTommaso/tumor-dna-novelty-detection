@@ -32,7 +32,7 @@ from src.gram import (
     compute_asymmetric_normalized_kernel,
 )
 from src.evaluation import evaluate_novelty_detector, evaluate_patient_level_novelty
-from src.loo_results import save_loo_results, print_loo_summary
+from src.loo_results import save_loo_results, save_fold_anomaly_scores, print_loo_summary
 from experiments.experiments_utils import (
     setup_logger,
     create_base_parser,
@@ -150,6 +150,17 @@ def _run_single_fold(fold: dict, args) -> dict:
             tumor_subject,
         )
         generate_loo_fold_plot(per_patient_data, fold_plot_dir, fold_name, args.seed)
+
+    # --- Save per-sequence anomaly scores ---
+    tumor_base_scores = os.path.basename(fold["test_tumor_files"][0])
+    tumor_subject_scores = "_".join(tumor_base_scores.split("_")[:2])
+    scores_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "results", "loo",
+        f"m_{args.mismatches}", f"k_{args.max_k}", tumor_subject_scores,
+        "anomaly_scores",
+    )
+    scores_csv = os.path.join(scores_dir, f"{fold_name}_seed{args.seed}.csv")
+    save_fold_anomaly_scores(per_patient_data, scores_csv)
 
     # --- Derive short tumor patient name ---
     tumor_base = os.path.basename(fold["test_tumor_files"][0])
