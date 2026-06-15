@@ -19,6 +19,7 @@ Protocol
 """
 
 import csv
+import gc
 import os
 import sys
 import time
@@ -187,6 +188,7 @@ def main():
             n_jobs=args.n_jobs,
         )
         K_train = normalize_gram(K_train_unnorm)
+        del K_train_unnorm  # free ~7 GB immediately
 
         # 2c. Asymmetric kernel (test vs train)
         logger.info("  Computing asymmetric test kernel ...")
@@ -198,6 +200,7 @@ def main():
             mkl_weights=mkl_weights,
             n_jobs=args.n_jobs,
         )
+        del train_states  # sparse feature matrices no longer needed
 
         # 2d. Fit OCSVM & score
         logger.info(f"  Fitting OCSVM (nu={args.nu_param}) ...")
@@ -239,6 +242,11 @@ def main():
         ]
         scores_path = os.path.join(scores_dir, f"seed{train_seed}_scores.csv")
         save_fold_anomaly_scores(per_patient_data, scores_path)
+
+        # ── Free all large objects before next iteration ──
+        del train_data, K_train, K_test, ocsvm, anomaly_scores
+        del scores_h3, scores_h4, inv_h3, inv_h4, per_patient_data
+        gc.collect()
 
     total_elapsed = time.time() - total_start
 
