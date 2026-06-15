@@ -157,7 +157,7 @@ def _run_single_fold(fold: dict, args) -> dict:
     scores_dir = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "results", "loo",
         f"m_{args.mismatches}", f"k_{args.max_k}", tumor_subject_scores,
-        "anomaly_scores",
+        "anomaly_scores", f"seed{args.seed}",
     )
     scores_csv = os.path.join(scores_dir, f"{fold_name}_seed{args.seed}.csv")
     save_fold_anomaly_scores(per_patient_data, scores_csv)

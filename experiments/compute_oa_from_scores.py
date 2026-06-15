@@ -7,7 +7,7 @@ using the existing KDE utilities from src/oa/evaluation_oa.py.
 Usage
 -----
     python experiments/compute_oa_from_scores.py \
-        --scores-dir results/loo/m_1/k_6/Colo_11/anomaly_scores
+        --scores-dir results/loo/m_1/k_6/Colo_11/anomaly_scores/seed42
 
 The script will:
   1. Load every CSV in the scores directory.
