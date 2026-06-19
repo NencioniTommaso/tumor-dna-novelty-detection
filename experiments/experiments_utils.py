@@ -255,3 +255,45 @@ def add_loo_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Path to write the per-fold results CSV (default: results/loo_results.csv).",
     )
+
+
+def build_loo_single_fold(data_dir: str, held_out_id: int) -> dict:
+    """Build train/test file lists for a single LOO fold.
+
+    Parameters
+    ----------
+    data_dir : str
+        Path to the directory containing the FASTA files.
+    held_out_id : int
+        ID of the healthy patient to hold out (2–7).
+
+    Returns
+    -------
+    dict
+        Keys:
+        - ``train_files``: list of 5 healthy FASTA paths
+        - ``held_out_file``: path to the held-out healthy FASTA
+        - ``tumor_files``: list of 3 tumor FASTA paths
+        - ``fold_name``: e.g. ``"LOO_Healthy_7"``
+    """
+    all_ids = list(range(2, 8))         #TODO: Change to (1, 8) after H1 is unzipped.
+    if held_out_id not in all_ids:
+        raise ValueError(
+            f"held_out_id must be in {all_ids}, got {held_out_id}"
+        )
+
+    held_out_file = os.path.join(
+        data_dir, f"Healthy_{held_out_id}_merged_subset_1200000.fa"
+    )
+    train_files = [
+        os.path.join(data_dir, f"Healthy_{i}_merged_subset_1200000.fa")
+        for i in all_ids if i != held_out_id
+    ]
+    tumor_files = build_tumor_files(data_dir)
+
+    return {
+        "train_files": train_files,
+        "held_out_file": held_out_file,
+        "tumor_files": tumor_files,
+        "fold_name": f"LOO_Healthy_{held_out_id}",
+    }

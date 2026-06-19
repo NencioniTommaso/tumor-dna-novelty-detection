@@ -57,6 +57,52 @@ def evaluate_novelty_detector(
     }
 
 
+def evaluate_novelty_detector_nystrom(
+    Phi_train: np.ndarray,
+    Phi_test: np.ndarray,
+    y_test_true: np.ndarray,
+    nu: float = 0.005,
+) -> Dict[str, Any]:
+    """
+    Fits a One-Class SVM on Nyström features and evaluates it.
+
+    Uses OneClassSVM(kernel='linear') on the Nyström feature map Φ,
+    which implicitly approximates the kernel SVM on the full Gram matrix.
+    Returns the same result dict as evaluate_novelty_detector.
+    """
+    logger.debug(f"Initializing One-Class SVM (kernel='linear') with nu={nu}")
+    oc_svm = OneClassSVM(kernel='linear', nu=nu)
+
+    logger.debug(f"Fitting SVM on Φ_train shape {Phi_train.shape}...")
+    oc_svm.fit(Phi_train)
+
+    logger.debug("Generating predictions and computing anomaly scores...")
+    predictions = oc_svm.predict(Phi_test)
+    anomaly_scores = oc_svm.decision_function(Phi_test)
+
+    # Invert scores for ROC-AUC:
+    # OC-SVM decision function yields lower (negative) scores for anomalies.
+    auc = roc_auc_score(y_test_true == -1, -anomaly_scores)
+
+    # zero_division=0 prevents warnings if a model predicts purely one class
+    report_str = classification_report(
+        y_test_true,
+        predictions,
+        target_names=['Cancer (-1)', 'Healthy (1)'],
+        zero_division=0
+    )
+
+    logger.debug(f"Evaluation complete for nu={nu} | AUC: {auc:.4f}")
+
+    return {
+        "nu": nu,
+        "auc": auc,
+        "report_str": report_str,
+        "predictions": predictions,
+        "anomaly_scores": anomaly_scores,
+    }
+
+
 def _short_patient_name(filename: str) -> str:
     """Shorten filename (e.g. Colo_6_merged_subset_1200000.fa -> Colo_6)."""
     parts = filename.split("_")
