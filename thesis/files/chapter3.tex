@@ -1,79 +1,91 @@
-\chapter{The Mismatch String Kernel}\label{ch:kernel}
+\chapter{Novelty Detection}\label{ch:novelty}
 
-\section{Kernel Methods: A Brief Introduction}\label{sec:kernel-intro}
+\section{Problem Formulation}\label{sec:novelty-formulation}
 
-% Definition of a kernel function: $K(x, x') = \langle \Phi(x), \Phi(x') \rangle_{\mathcal{H}}$
-% The kernel trick: computing inner products in a high-dimensional feature space
-% without explicitly constructing the feature map $\Phi$.
-% Mercer's theorem and the characterisation of valid (positive semi-definite) kernels.
-% Why kernels are well-suited for structured data (strings, graphs, sets).
+Novelty detection is a specialized branch of machine learning focused on identifying new or unknown patterns within a dataset that differ significantly from the data observed during training. 
+Unlike standard binary classification, where the algorithm is exposed to both positive and negative examples during the learning phase, novelty detection operates under the assumption that the training set consists only of ``normal'' instances. 
 
-\section{String Kernels}\label{sec:string-kernels}
+\begin{definizione}[Novelty Detection]\label{def:novelty}
+Given a training dataset $X = \{x_1, x_2, \ldots, x_n\}$ drawn from an unknown underlying probability distribution $P$ representing the normal class, the objective of novelty detection is to learn a decision function $f: \mathcal{X} \to \mathbb{R}$ such that:
+\begin{equation}\label{eq:novelty-decision}
+f(x) \begin{cases} 
+> 0 & \text{if } x \sim P \quad \text{(normal)} \\
+< 0 & \text{if } x \nsim P \quad \text{(novelty)}
+\end{cases}
+\end{equation}
+The function $f(x)$ effectively defines a boundary encompassing the support of the distribution $P$ within the feature space.
+\end{definizione}
 
-\subsection{The Spectrum Kernel}\label{sec:spectrum}
-% The $k$-spectrum kernel (Leslie et al., 2002):
-% $\Phi_k(x) = (\phi_\alpha(x))_{\alpha \in \Sigma^k}$, where $\phi_\alpha(x)$
-% counts the number of occurrences of $k$-mer $\alpha$ in string $x$.
-% Limitations: exact matching only, sensitive to single-nucleotide variations.
+It is fundamental to distinguish novelty detection from outlier detection. While both aim to find anomalous data points, outlier detection is typically a task where anomalies are already present and mixed within the training set, and the goal is to isolate them. 
+Instead, novelty detection is an inductive task: the model is built exclusively on a clean, normal training set and is subsequently applied to classify unseen test data as either normal or novel.
 
-\subsection{The Mismatch Kernel}\label{sec:mismatch-kernel}
-% The $(k, m)$-mismatch kernel (Leslie et al., 2004):
-% For each observed $k$-mer, increment the count of all $k$-mers within Hamming
-% distance $m$ from it. This neighbourhood expansion makes the kernel robust
-% to substitutions.
-%
-% Formal definition:
-% $N(k, m)(\alpha) = \{ \beta \in \Sigma^k : d_H(\alpha, \beta) \leq m \}$
-% $\Phi_{k,m}(x) = \sum_{i=1}^{|x|-k+1} \mathbf{1}_{N(k,m)(x[i:i+k])}$
-%
-% Alphabet: the extended 6-letter epigenetic alphabet $\Sigma = \{A, C, G, T, M, H\}$
+In our applied case of cancer detection using cell-free DNA (cfDNA), this mathematical formulation is exceptionally useful. Obtaining a comprehensive dataset that characterizes all possible variations of tumor-derived cfDNA is practically impossible, as cancer mutations are highly heterogeneous and vary widely among patients. 
+However, collecting blood samples from healthy individuals to model ``normal'' cfDNA profiles is relatively straightforward. 
+By training a novelty detection model solely on healthy patient data, we establish a robust baseline of biological normality. 
+Consequently, any cfDNA sequence that deviates significantly from this baseline can be flagged as a potential tumor-derived sequence, regardless of the specific genetic mutation it carries.
 
-\subsection{Weighted Mismatch Neighbourhood}\label{sec:weighted-mismatch}
-% Extension used in this work: instead of binary neighbourhood membership,
-% each neighbour at Hamming distance $d$ contributes weight $\lambda^d$
-% where $\lambda \in [0, 1]$ is a decay factor (mismatch\_decay).
-% This gives higher importance to exact matches and near-matches.
+\section{One-Class Support Vector Machine}\label{sec:ocsvm}
 
-\section{Multiple Kernel Learning}\label{sec:mkl}
-% Combining kernels across multiple values of $k$:
-% $K_{\text{MKL}}(x, x') = \sum_{k=k_{\min}}^{k_{\max}} w_k \, K_k(x, x')$
-% Weight generation strategy: linear ramp with noise suppression for short $k$-mers.
+Support Vector Machines (SVMs) are a powerful class of machine learning algorithms traditionally utilized for binary classification. The core principle of a standard SVM is to find an optimal hyperplane that separates two distinct classes of data in a high-dimensional feature space, maximizing the margin between them. This margin is defined as the distance between the hyperplane and the closest data points from either class, which are appropriately named the \textit{support vectors}. By maximizing this margin, SVMs achieve robust generalization capabilities on unseen data.
 
-\section{Gram Matrix Computation}\label{sec:gram}
+While traditional SVMs require labeled examples from multiple classes, the \textit{One-Class} Support Vector Machine (OC-SVM) adapts this principle for novelty detection, where only data from a single ``normal'' class is available during training.
 
-\subsection{Symmetric Gram Matrix (Training)}\label{sec:gram-symmetric}
-% $K_{ij} = \langle \Phi(x_i), \Phi(x_j) \rangle$ for all pairs in the training set.
-% Exploiting symmetry: only computing the upper triangle.
-% Kernel normalisation: $\hat{K}_{ij} = K_{ij} / \sqrt{K_{ii} K_{jj}}$
+\subsection{Formulation}\label{sec:ocsvm-formulation}
+The One-Class Support Vector Machine (OC-SVM), introduced by Schölkopf et al. (2001), approaches the novelty detection problem by attempting to separate the training data from the origin in the feature space $\mathcal{H}$ with maximum margin.
+The primal optimization problem is formulated as:
+\begin{equation}\label{eq:ocsvm-primal}
+\min_{w, \rho, \xi} \frac{1}{2}\|w\|^2 - \rho + \frac{1}{\nu n} \sum_{i=1}^n \xi_i
+\end{equation}
+subject to the constraints:
+\begin{equation}\label{eq:ocsvm-constraints}
+\langle w, \Phi(x_i) \rangle \geq \rho - \xi_i, \quad \xi_i \geq 0 \quad \text{for } i = 1, \ldots, n
+\end{equation}
 
-\subsection{Asymmetric Gram Matrix (Inference)}\label{sec:gram-asymmetric}
-% At test time we need $K_{\text{test}}[i, j] = \langle \Phi(x_i^{\text{test}}), \Phi(x_j^{\text{train}}) \rangle$.
-% Proper normalisation requires the test self-norms $K^{\text{test}}_{ii}$, which
-% differ from training norms. Describe the vocabulary alignment issue and the
-% full-vocabulary optimisation.
+The hyperparameter $\nu \in (0, 1]$ is the single tuneable constant of the One-Class SVM and admits several complementary interpretations that together govern the geometry of the learned decision boundary. First, $\nu$ acts as an \textbf{upper bound on the fraction of training samples that may fall outside the decision region}, i.e.\ that the model is permitted to treat as outliers. If the training set contains $n$ samples, at most $\lfloor \nu n \rfloor$ of them can lie on the wrong side of the hyperplane (i.e.\ have non-zero slack variables $\xi_i > 0$). Conversely, $\nu$ provides a \textbf{lower bound on the fraction of training samples that serve as support vectors}: the number of support vectors is guaranteed to be at least $\lceil \nu n \rceil$. This dual role means that increasing $\nu$ simultaneously widens the tolerance for outliers and forces the model to rely on a larger subset of the data to define its boundary.
 
-\section{Algorithmic Optimisations}\label{sec:optimisations}
+From a regularisation perspective, $\nu$ controls the trade-off between the volume of the decision region and the empirical error on the training set. A small $\nu$ favours a tight, selective boundary that encloses nearly all training points, yielding an aggressive model that flags even minor deviations from the training distribution. A large $\nu$ relaxes the boundary, permitting a broader region of normality and a more conservative anomaly detector. In the dual formulation, the relationship between $\nu$ and the box constraint on the Lagrange multipliers $\alpha_i \leq \frac{1}{\nu n}$ makes this trade-off explicit: lower $\nu$ increases the upper bound on individual $\alpha_i$, concentrating the decision function on fewer, more influential support vectors; higher $\nu$ distributes influence more broadly across the training set.
 
-\subsection{Sparse Feature Representation}\label{sec:sparse}
-% For large $k$ and small $m$, the feature vectors are extremely sparse.
-% Using scipy.sparse CSR matrices reduces memory and enables fast dot products.
+To solve this optimization problem practically, we construct the Lagrangian and derive its dual form. 
+The dual problem relies entirely on the inner products between training vectors, making it perfectly suited for the kernel trick application discussed in Chapter \ref{ch:kernel}   \textbf{(see if full formula in paper)}:
+\begin{equation}\label{eq:ocsvm-dual}
+\min_{\alpha} \frac{1}{2} \sum_{i=1}^n \sum_{j=1}^n \alpha_i \alpha_j K(x_i, x_j)
+\end{equation}
+subject to the constraints:
+\begin{equation}\label{eq:ocsvm-dual-constraints}
+0 \leq \alpha_i \leq \frac{1}{\nu n}, \quad \sum_{i=1}^n \alpha_i = 1 \quad \text{for } i = 1, \ldots, n
+\end{equation}
+where $\alpha_i$ are the Lagrange multipliers. The training instances $x_i$ for which $\alpha_i > 0$ are the support vectors, and they exclusively define the decision boundary. By substituting the standard dot products with our sequence kernels $K(x_i, x_j)$, the SVM can operate effectively in the high-dimensional feature space without explicitly computing the complex feature maps.
 
-\subsection{LRU-Cached Neighbourhood Generation}\label{sec:lru-cache}
-% The function \texttt{generate\_mismatch\_neighborhood} is decorated with
-% \texttt{@lru\_cache}: the same $k$-mer neighbourhood is never recomputed.
+\subsection{Decision Function and Anomaly Scores}\label{sec:decision-function}
 
-\subsection{Pre-Enumerated Vocabulary}\label{sec:vocab}
-% \texttt{build\_full\_vocabulary} generates all $|\Sigma|^k$ possible $k$-mers
-% deterministically, allowing parallel chunks to operate with no shared mutable
-% state and guaranteeing consistent column indices.
+Once the dual optimization problem is solved and the optimal Lagrange multipliers $\alpha_i$ are determined, the decision boundary is fully defined. The decision function $f(x)$ for an unseen test point $x$ evaluates its position relative to the learned separating hyperplane in the feature space.
 
-\subsection{Block-Partitioned Matrix Multiplication}\label{sec:block-parallel}
-% For large $N$, the Gram matrix is tiled into blocks of size $B \times B$.
-% Each block $K[r_s:r_e, c_s:c_e] = X[r_s:r_e] \cdot X[c_s:c_e]^T$ is
-% computed independently via joblib, avoiding materialisation of a single
-% dense $N \times N$ product.
+Using the kernel trick, we can express this decision function without explicitly computing the feature vector $\Phi(x)$, relying instead on the kernel function $K(x_i, x)$ that evaluates the similarity between the test point and the training data:
+\begin{equation}\label{eq:decision-function}
+f(x) = \langle w, \Phi(x) \rangle - \rho = \sum_{i=1}^n \alpha_i K(x_i, x) - \rho
+\end{equation}
+The value $f(x)$ represents the signed distance from the test point to the separating hyperplane. A positive value indicates that the point falls on the ``normal'' side of the boundary, while a negative value signifies that it falls outside the normal region.
 
-\subsection{BLAS Thread Pinning}\label{sec:blas}
-% Setting \texttt{OMP\_NUM\_THREADS=1} and equivalent variables before parallel
-% kernel computation prevents hidden thread contention between joblib workers
-% and the underlying BLAS implementation.
+For the purpose of evaluating and ranking novelties, we define an anomaly score $s(x)$ as the negative of the decision function:
+\begin{equation}\label{eq:anomaly-score}
+s(x) = -f(x) = \rho - \sum_{i=1}^n \alpha_i K(x_i, x)
+\end{equation}
+With this formulation, a higher anomaly score directly indicates a greater degree of abnormality. 
+These continuous scores provide a much more informative evaluation than strict binary classifications, allowing us to assess the confidence of the novelty prediction for every single input sequence. 
+
+In practice, when implementing this approach, we precompute the kernel matrix using the string kernels described in Chapter \ref{ch:kernel} and provide this matrix to standard software solvers (such as \texttt{scikit-learn}'s \texttt{OneClassSVM} configured with \texttt{kernel='precomputed'}). The solver then efficiently determines the support vectors and the $\alpha_i$ weights, allowing us to compute the anomaly scores that will then need to be used for patient-level inference.
+
+\section{Theoretical Equivalence of $\nu$-SVC and SVDD under Unit-Norm Transformation}\label{sec:svdd-equivalence}
+The Support Vector Data Description (SVDD) identifies anomalies by enclosing target training data within a hypersphere of minimal volume. Alternatively, the One-Class Support Vector Machine ($\nu$-SVC) operates by placing a maximal margin hyperplane that separates the dataset from the origin. While geometrically distinct in raw feature space, Tax and Duin demonstrate that these solutions become comparable when the data vectors are transformed to possess a unit norm.
+
+This equivalence is explicitly verified through the dual optimization formulations. The standard SVDD dual objective seeks to maximize:
+$$L=\sum_{i}\alpha_{i}(x_{i}\cdot x_{i})-\sum_{i,j}\alpha_{i}\alpha_{j}(x_{i}\cdot x_{j})$$
+subject to the equality constraint $\sum_{i}\alpha_{i}=1$. When a precomputed Gram matrix is explicitly normalized such that the diagonal elements are unity ($K_{ii}=1$), the inner product $(x_{i}\cdot x_{i})$ evaluates to $1$ for all samples. Substituting this into the first term of the objective function, and applying the sum-to-one equality constraint, the entire first term collapses to exactly $1$.
+
+The SVDD optimization thus reduces to maximizing $1-\sum_{i,j}\alpha_{i}\alpha_{j}K_{ij}$. Because maximizing the negative quadratic form is mathematically equivalent to minimizing the positive quadratic form, the objective aligns strictly with the standard $\nu$-SVC dual problem, which minimizes $\frac{1}{2}\sum_{i,j}\alpha_{i}\alpha_{j}K_{ij}$. Consequently, applying an $L_2$ normalization to a kernel matrix prior to $\nu$-SVC training forces the solver to converge on the identical support vectors and decision boundary as an SVDD model, provided the capacity parameters are scaled inversely according to the relation $C=\frac{1}{\nu N}$.
+
+\section{Patient-Level Aggregation: Multiple Instance Learning}\label{sec:mil}
+
+The problem of diagnosing cancer from cfDNA sequences naturally falls into the paradigm of Multiple Instance Learning (MIL). In standard supervised learning, each individual sample is assigned a specific label. However, in our clinical scenario, labels are only available at the patient level. A patient is represented as a ``bag'' containing millions of individual cfDNA reads (the instances), and we must infer the diagnosis for the entire bag based on the properties of its contents.
+
+Once the OC-SVM generates an anomaly score for each individual cfDNA read, these instance-level scores must be aggregated to produce a single, comprehensive patient-level anomaly score. 

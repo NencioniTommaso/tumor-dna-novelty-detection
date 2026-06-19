@@ -1,6 +1,6 @@
 \documentclass[a4paper,oneside]{Tptesi2}
 
-\usepackage[italian]{babel}
+%\usepackage[italian]{babel}
 \usepackage{listings}
 \usepackage{amsmath,amssymb}
 \usepackage{verbatim}
@@ -84,6 +84,8 @@
 \maketitle % crea il frontespizio (ricordati di copiare "stemma.eps" nella tua directory)
 %
 %
+\frontmatter
+\include{files/abstract}
 %\pagenumbering{roman}
 \tableofcontents % inserisce indice generale
 \cleardoublepage
@@ -100,11 +102,8 @@
 %\cleardoublepage
 %\pagenumbering{arabic}
 %\input{files/ringraziamenti}
-\frontmatter
-\include{files/abstract}
 
 \mainmatter
-\include{files/introduction}
 \include{files/chapter1}
 \include{files/chapter2}
 \include{files/chapter3}
@@ -117,7 +116,7 @@
 \addcontentsline{toc}{chapter}{Bibliografia}
 \bibliographystyle{plain}
 \bibliography{files/biblio}
-\bibliographystyle{unsrt}
+%\bibliographystyle{unsrt}
 %\bibliography{sp,xml}
 
 \end{document} 

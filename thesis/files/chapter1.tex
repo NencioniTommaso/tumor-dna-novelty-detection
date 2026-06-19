@@ -1,14 +1,28 @@
-\chapter{Background and Related Work}\label{ch:background}
+\chapter{Context and Problem Formulation}\label{ch:context}
 
-\section{Biological Background}\label{sec:bio-background}
+\section{Introduction}
+Liquid biopsy shifts the diagnostic focus from direct tissue extraction, which is by nature invasive, carries risks for the patient and can be unfeasible for inaccessible sites, towards a non-invasive paradigm built upon cell-free DNA (cfDNA) circulating in the bloodstream.
+This type of analysis carries its own set of challenges, which can be summarized in three main categories: 
+\begin{itemize}
+    \item \textbf{Low Abundance of Target Signal:} Especially in early-stage cancer patients tumor-derived cfDNA (ctDNA) represents a small fraction of the total circulating DNA.
+    
+    \item \textbf{Severe Fragmentation:} Unlike when extracting information from intact cells, cfDNA is characterized by a significantly shorter length, which makes it harder to identify tumoral patterns.
+    
+    \item \textbf{Overwhelming Physiological Background Noise:} The vast majority of circulating DNA in an oncology patient originates from normal cells and not from the tumor. In other words, the tumoral signal is buried under a massive physiological background noise. 
+\end{itemize}
 
-\subsection{Cell-Free DNA and Liquid Biopsy}\label{sec:cfdna}
-% What cfDNA is, how it enters the bloodstream, fragment size distribution,
-% the concept of circulating tumour DNA (ctDNA) and its fraction in early-stage cancer.
+To enable computational analysis, circulating cell-free DNA fragments isolated from liquid biopsies must be digitized into alphanumeric sequences. 
+This digitization is executed via third-generation Oxford Nanopore Technology (ONT) sequencing, which measures the disruptions of an applied current across a membrane embedded with protein nanopores. As a single-stranded DNA fragment translocates through the pore, different nucleotide combinations block the channel to varying degrees, yielding a continuous current signal. 
 
-\subsection{Epigenetic Modifications}\label{sec:epigenetics}
-% DNA methylation (5-methylcytosine) and hydroxymethylation (5-hydroxymethylcytosine),
-% their role in gene regulation, and why they are altered in cancer.
-% Motivation for the extended 6-letter alphabet {A, C, G, T, M, H}.
+Crucially, because this platform sequences native, unamplified DNA strands, the raw current fluctuations preserve the signatures of epigenetic modifications. Downstream machine learning basecallers can therefore process this continuous signal to differentiate not only the canonical bases ($A$, $C$, $G$, $T$) but also modified variants such as 5-methylcytosine ($M$) and 5-hydroxymethylcytosine ($H$).
 
-\section{Prior Work}\label{sec:prior-work}
+These DNA sequences are stored inside .fa (fasta) files, which compose the dataset used in this thesis.
+
+%(maybe insert a diagram like innocenti)
+
+\section{Core Idea}\label{sec:core-idea}
+In the context of this study, each patient's liquid biopsy profile is represented by a collection of raw sequencing reads stored in a FASTA (.fa) format. 
+Because circulating tumor signals are extraordinarily heterogeneous and mutationally unstable, attempting to define a universal ``cancer profile'' for supervised classification is highly impractical. Instead, this thesis relies on an unsupervised novelty detection paradigm: we aim to map the strict boundaries of what constitutes a ``healthy'' genomic and epigenetic baseline. Once this normative boundary is established, we can infer the presence of malignancy in a new patient by measuring how far their sequencing reads deviate from this baseline.
+
+To achieve this computationally, a DNA sequence is treated as a finite string of characters drawn from an extended epigenetic alphabet $\Sigma = \{A, C, G, T, M, H\}$. 
+By mapping these sequences into a high-dimensional feature space using a mismatch string kernel, we can train a One-Class Support Vector Machine ($\nu$-SVC) to mathematically circumscribe the healthy sequences within a tight bounding boundary, establishing our definitive threshold for anomaly detection.

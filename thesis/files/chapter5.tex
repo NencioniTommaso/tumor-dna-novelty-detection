@@ -1,29 +1,54 @@
-\chapter{Experiments}\label{ch:experiments}
+\chapter{Experiments Conducted}\label{ch:experiments}
 
-\section{Experimental Protocol}\label{sec:protocol}
-% Describe the overall objective of the experiments.
-% The use of Leave-One-Out Cross-Validation (LOO-CV) over the healthy cohort.
-% Why LOO-CV is appropriate given the limited number of independent healthy
-% donors (patients Healthy_2 through Healthy_7).
+\section{Experimental Setup}\label{sec:experimental-setup}
 
-\section{Leave-One-Out Cross-Validation Scheme}\label{sec:loo-cv}
-% Detail the fold construction:
-% - In each fold, hold out one healthy patient as the "test normal".
-% - Train the OC-SVM on the remaining 5 healthy patients.
-% - Evaluate the model on the held-out healthy patient and one tumour patient.
-% - Repeat for each tumour patient (Colo_11, Colo_12, Colo_13) across all folds.
-% Ensures that the test healthy patient is strictly unseen during training.
+All experiments described in this chapter share a common computational pipeline.
+Training data consists of cell-free DNA reads from a single healthy patient, encoded in FASTA format using the extended epigenetic alphabet $\Sigma = \{A, C, G, T, M, H\}$.
+The mismatch string kernel is computed as described in Chapter~\ref{ch:kernel}, the resulting Gram matrix is cosine-normalised (Equation~\ref{eq:gram-normalize}), and a One-Class SVM with a precomputed kernel is fitted using \texttt{scikit-learn}'s \texttt{OneClassSVM} implementation.
+Test sequences are scored through the asymmetric kernel matrix (Section~\ref{sec:gram-asymmetric}), and patient-level anomaly scores are obtained by aggregating per-read scores as outlined in Section~\ref{sec:mil}.
 
-\section{Hyperparameter Selection}\label{sec:hyperparameters}
-% Explain the fixed choices or search grid:
-% - Kernel parameters: maximum k-mer size ($k_{max}$), allowed mismatches ($m$),
-%   mismatch decay factor ($\lambda$).
-% - MKL noise threshold.
-% - OC-SVM hyperparameter: $\nu$ (expected anomaly rate).
-% Mention the computational constraints that informed these choices.
+Unless otherwise noted, the kernel parameters used across all experiments are a maximum $k$-mer length $k_{\max}$ with mismatch tolerance $m$, combined through a Multiple Kernel Learning (MKL) linear ramp weighting scheme (Section~\ref{sec:mkl}).
 
-\section{Implementation Details}\label{sec:experiment-details}
-% Hardware used (e.g. CPU cores, memory limits).
-% Sample sizes per patient (e.g. 18,000 for training, 1,500 for testing) to
-% maintain manageable Gram matrix dimensions.
-% Seeding and reproducibility.
+Across all experiments, the OC-SVM hyperparameter is set to $\nu = 0.2$. This choice is motivated by both the theoretical semantics of $\nu$ and the known biology of the liquid biopsy setting. As discussed in Section~\ref{sec:ocsvm-formulation}, $\nu$ upper-bounds the fraction of training samples that the model may treat as outliers. In the clinical context, the training set is composed exclusively of cell-free DNA fragments drawn from healthy donors; however, even within a nominally healthy population, natural inter-individual variability, sequencing artefacts, and low-level somatic mosaicism can produce fragments that deviate from the majority distribution. Setting $\nu = 0.2$ instructs the model to tolerate up to $20\%$ of these marginal training fragments as permissible boundary violations, thereby preventing the decision region from over-fitting to noise while still enclosing the core healthy distribution.
+
+The value is further rationalised by the expected tumoral signal strength at test time. Liquid biopsy studies (\textbf{ask Professor for references}) report that the fraction of circulating tumour DNA (ctDNA) within the total cfDNA pool of an oncology patient typically ranges from approximately $0.6\%$ in early-stage disease to over $50\%$ in advanced metastatic cases. A $\nu$ of $0.2$ produces a boundary that is sufficiently tight to detect the distributional shift even at the lower end of this range --- where the tumoral fraction is small and the anomaly signal is diluted among a majority of healthy-looking fragments --- yet permissive enough to avoid flagging the natural stochastic variation between healthy individuals as anomalous. In practice, setting $\nu$ much lower (e.g.\ $0.05$) would create an overly restrictive model that misclassifies healthy patients as anomalous due to minor distributional differences, while setting $\nu$ too high (e.g.\ $0.5$) would relax the boundary to the point where subtle tumoral signals, especially at low ctDNA fractions, become indistinguishable from normal variability.
+\section{Experiment 1: Train-Seed Stability}\label{sec:seed-stability}
+
+\subsection{Motivation}\label{sec:seed-motivation}
+
+Each healthy patient in the dataset is represented by a FASTA file containing approximately 1\,200\,000 cell-free DNA fragments.
+Training the OC-SVM on the full set of available reads would be computationally prohibitive: even if we were to train only on a single healthy subject,the Gram matrix alone would require storing and factorising a $1.2 \times 10^{6} \times 1.2 \times 10^{6}$ matrix, far exceeding practical memory limits.
+The pipeline therefore operates on a random subsample of 30\,000 training sequences, which represents only 2.5\% of the available fragments from a single patient.
+
+This subsampling raises a question: \textbf{is a model trained on 30\,000 reads sufficient to capture the distribution of all 1\,200\,000 fragments?}
+If the decision boundary learned by the OC-SVM varies substantially depending on which particular subset of reads is drawn, then the anomaly scores assigned to unseen patients would be unstable, and any diagnostic conclusion would be unreliable.
+The seed stability experiment was designed precisely to quantify this risk.
+
+\subsection{Protocol}\label{sec:seed-protocol}
+
+The experiment isolates the effect of training-set randomness by fixing every other source of variation.
+Specifically:
+
+\begin{enumerate}
+    \item \textbf{Fixed test data.}
+    A set of 10\,000 sequences is sampled from Healthy~3 and an independent set of 10\,000 sequences from Healthy~4, both using a fixed random seed ($s_{\text{test}} = 42$).
+    These two test sets remain identical across all runs.
+
+    \item \textbf{Variable training data.}
+    For each of 10 independent runs, 30\,000 sequences are sampled from Healthy~2 using a different training seed ($s_{\text{train}} \in \{42, 43, \ldots, 51\}$).
+    Each run therefore trains on a distinct, non-overlapping (in expectation) subset of the available fragments.
+
+    \item \textbf{Kernel and model fitting.}
+    For each training subsample, the full string-kernel pipeline is executed: the symmetric training Gram matrix is computed and normalised, an OC-SVM is fitted, and the asymmetric test kernel is evaluated to produce anomaly scores for Healthy~3 and Healthy~4.
+
+    \item \textbf{Evaluation metric.}
+    Because both test patients are healthy, their anomaly-score distributions should ideally be indistinguishable.
+    The degree of overlap between the two distributions is quantified via the Overlapping Area (OA) between their kernel density estimates:
+    \begin{equation}\label{eq:oa}
+        \text{OA} = 1 - \frac{1}{2} \int \left| \hat{f}_{H_3}(x) - \hat{f}_{H_4}(x) \right| \, dx
+    \end{equation}
+    An OA close to 1 indicates that the two score distributions are nearly identical, which is the expected outcome if the model generalises well from 30\,000 training reads.
+    An OA that fluctuates widely across seeds would signal that the training subsample size is insufficient.
+\end{enumerate}
+
+By repeating this procedure across 10 seeds and reporting the mean and standard deviation of OA, the experiment provides a direct empirical answer to whether the 30\,000-read training budget is adequate for stable generalisation.

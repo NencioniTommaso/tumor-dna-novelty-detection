@@ -1,29 +1,171 @@
-\chapter{Data}\label{ch:data}
+\chapter{The Mismatch String Kernel}\label{ch:kernel}
 
-\section{Data Origin}\label{sec:data-origin}
-% Describe the source of the sequencing data:
-% - Sequencing platform and protocol (e.g. whole-genome bisulfite sequencing)
-% - Cohort composition: healthy donors (Healthy_2 through Healthy_7) and
-%   colon cancer patients (Colo_11, Colo_12, Colo_13)
-% - How samples were collected (liquid biopsy vs tissue) and processed
+\section{Kernel Methods: A Brief Introduction}\label{sec:kernel-intro}
 
-\section{DNA Sequences and Read Structure}\label{sec:read-structure}
-% Format of the data: FASTA files, one read per entry
-% Typical read length, number of reads per patient (e.g. 1.2M subsetted reads)
-% Alphabet: {A, C, G, T, M, H} — the role of bisulfite conversion in producing
-% methylation-aware bases
+In the field of machine learning, assessing the similarity between data points is a fundamental requirement. However, when dealing with complex, non-vectorial data such as discrete strings or genomic sequences, defining this similarity is not straightforward. Kernel methods provide an elegant mathematical framework to solve this by bridging the gap between abstract objects and structured linear spaces.
 
-\section{Expected Signatures}\label{sec:expected-signatures}
-% What we expect to find in the data:
-% - Tumour reads may carry somatic point mutations (C>T transitions, etc.)
-% - Altered methylation landscapes: global hypomethylation, promoter
-%   hypermethylation in tumour suppressor genes
-% - The hypothesis that these differences will manifest as distributional
-%   shifts detectable by a kernel-based novelty detector
+\subsection{The Kernel Trick and Feature Spaces}\label{sec:kernel-trick}
 
-\section{Data Preprocessing}\label{sec:preprocessing}
-% Uppercasing, filtering of ambiguous bases
-% Subsampling strategy: random sampling of N reads per patient to control
-%   computational cost while preserving statistical representativeness
-% Memory-mapped FASTA reading (MMapFastaReader) and index caching for
-%   reproducible, fast random access
+Many standard learning algorithms, such as Support Vector Machines (SVMs) that will be used in this work, rely on dot products to evaluate similarity between patterns. However, input patterns do not necessarily exist in a native dot product space initially; they could be any kind of discrete object, including biological sequences.
+
+To apply linear analytical geometry to these objects, we must first map them from their original input domain $\mathcal{X}$ into a dot product space $\mathcal{H}$, commonly referred to as the feature space. This transformation is performed via a mapping function $\Phi$:
+
+\begin{equation}\label{eq:feature-map}
+x \mapsto \mathbf{x} := \Phi(x)
+\end{equation}
+
+\begin{definizione}[Kernel Function]\label{def:kernel}
+Embedding data into the feature space $\mathcal{H}$ via $\Phi$ allows us to define a similarity measure directly from the dot product in that space. A function $k$ that computes this similarity is called a kernel, defined as:
+\begin{equation}\label{eq:kernel-def}
+k(x, x') := \langle \mathbf{x}, \mathbf{x'} \rangle = \langle \Phi(x), \Phi(x') \rangle
+\end{equation}
+\end{definizione}
+
+This substitution is known as the ``kernel trick''. The power of the kernel trick lies in its ability to compute the inner product $\langle \Phi(x), \Phi(x') \rangle$ directly in the input space $\mathcal{X}$ without ever explicitly constructing or evaluating the potentially high-dimensional (or even infinite-dimensional) feature vectors $\Phi(x)$ and $\Phi(x')$. Given an algorithm formulated entirely in terms of a positive definite kernel $k$, one can effortlessly replace $k$ with another positive definite kernel, effectively changing the feature space mapping without altering the underlying dot product-based algorithm.
+
+\subsection{Theoretical Foundations (RKHS and Mercer's Theorem)}\label{sec:rkhs}
+
+For a function $k(x, x')$ to be considered a valid kernel that computes a dot product in some feature space $\mathcal{H}$, it must satisfy specific mathematical properties. Primarily, the kernel must be symmetric and give rise to a positive definite Gram matrix for any set of input patterns.
+
+Any positive definite kernel can be associated with a Reproducing Kernel Hilbert Space (RKHS). In this functional space, the kernel acts as the representer of evaluation, meaning that for any function $f \in \mathcal{H}$, the reproducing property holds:
+
+\begin{equation}\label{eq:reproducing-property}
+\langle f, k(x, \cdot) \rangle = f(x)
+\end{equation}
+
+Consequently, taking the dot product of the kernel with itself yields the kernel function evaluated at those points:
+
+\begin{equation}\label{eq:kernel-dot}
+\langle k(x, \cdot), k(x', \cdot) \rangle = k(x, x')
+\end{equation}
+
+\begin{teorema}[Mercer's Theorem]\label{thm:mercer}
+The theoretical justification for why such feature spaces exist is provided by Mercer's Theorem. A symmetric, real-valued function $k \in L_{\infty}(\mathcal{X}^2)$ corresponds to a dot product in a feature space if the integral operator associated with it is positive definite. Specifically, for all functions $f \in L_2(\mathcal{X})$, the kernel must satisfy the condition:
+\begin{equation}\label{eq:mercer-condition}
+\int_{\mathcal{X}^2} k(x, x') f(x) f(x') \, d\mu(x) d\mu(x') \geq 0
+\end{equation}
+\end{teorema}
+
+Because Mercer kernels are positive definite, they are also reproducing kernels, allowing them to be seamlessly represented as dot products within Hilbert spaces. This mathematical foundation guarantees that as long as a function is a valid positive definite kernel, we can safely compute similarity measures for complex structures like genomic sequences, knowing that a corresponding feature space $\mathcal{H}$ implicitly exists to support the operations.
+
+\section{String Kernels for Genomic Sequences}\label{sec:string-kernels}
+
+Standard continuous kernels, such as the Radial Basis Function (RBF), are typically designed for continuous vectorial data and often fail to capture the underlying structure of discrete biological sequences. Genomic sequences are intrinsically discrete, vary in length, and lack a natural geometric alignment in a standard Euclidean space. To address this, string kernels map these sequences into a high-dimensional feature space based on their sub-string occurrences. In this work, the sequences are composed of an extended epigenetic alphabet:
+\begin{equation}\label{eq:alphabet}
+\Sigma = \{A, C, G, T, M, H\}
+\end{equation}
+which incorporates both standard nucleotides and specific epigenetic modifications.
+
+\subsection{The Spectrum Kernel}\label{sec:spectrum}
+
+The simplest approach to defining a sequence similarity measure is through the exact matching of short subsequences, known as $k$-mers. This methodology forms the basis of the spectrum kernel, which constructs a feature space indexed by all possible sequences of length $k$. 
+
+\begin{definizione}[Spectrum Feature Map]\label{def:spectrum-feature-map}
+The spectrum feature map for a sequence $x$ at k-mer length $k$ is defined as the vector of k-mer counts:
+\begin{equation}\label{eq:spectrum-feature-map}
+\Phi_k(x) = (\phi_a(x))_{a \in \mathcal{A}^k}
+\end{equation}
+\end{definizione}
+
+In this representation, each coordinate corresponds to the number of times a specific $k$-mer appears in the input sequence. Because any given sequence of length $n$ contains at most $n - k + 1$ distinct $k$-mers, the resulting feature vector is highly sparse, even though the theoretical dimensionality of the space ($|\Sigma|^k$) can be exceptionally large.
+
+\begin{definizione}[Spectrum Kernel]\label{def:spectrum-kernel}
+The spectrum kernel is the inner product of the spectrum feature representations:
+\begin{equation}\label{eq:spectrum-kernel}
+K_k(x, y) = \langle \Phi_k(x), \Phi_k(y) \rangle
+\end{equation}
+\end{definizione}
+
+While the spectrum kernel is computationally efficient, it exhibits limitations in biological applications. Since it relies exclusively on exact matches, a single nucleotide variation or sequencing error completely alters the $k$-mer, preventing the kernel from recognizing the structural similarity between two closely related motifs.
+
+\subsection{The Mismatch Kernel}\label{sec:mismatch-kernel}
+
+To overcome the limitations of exact matching, the mismatch kernel introduces a degree of flexibility that accounts for natural variations and sequencing noise without requiring complex generative models, such as Hidden Markov Models. Instead of matching $k$-mers strictly, the mismatch kernel considers a neighborhood of similar sequences.
+
+\begin{definizione}[Mismatch Neighbourhood]\label{def:mismatch-neighbourhood}
+The $(k,m)$-mismatch neighbourhood of a k-mer $\alpha$ is the set of all k-mers within Hamming distance $m$:
+\begin{equation}\label{eq:mismatch-neighbourhood}
+N_{(k,m)}(\alpha) = \{ \beta \in \Sigma^k : d_H(\alpha, \beta) \leq m \}
+\end{equation}
+\end{definizione}
+
+\begin{definizione}[Mismatch Feature Map]\label{def:mismatch-feature-map}
+The mismatch feature map for a single k-mer $\alpha$ assigns a weight of 1 to all k-mers within the mismatch neighbourhood:
+\begin{equation}\label{eq:mismatch-feature-kmer}
+\Phi_{(k,m)}(\alpha) = (\phi_{\beta}(\alpha))_{\beta \in \Sigma^k}
+\end{equation}
+The feature map for a full sequence $x$ is obtained by summing over all k-mers in $x$:
+\begin{equation}\label{eq:mismatch-feature-seq}
+\Phi_{(k,m)}(x) = \sum_{k\text{-mers } \alpha \text{ in } x} \Phi_{(k,m)}(\alpha)
+\end{equation}
+\end{definizione}
+
+By expanding the feature representation additively over the mismatch neighborhood, a single $k$-mer observation contributes not only to its exact corresponding coordinate but also to the coordinates of all its $m$-mismatch neighbors. Consequently, sequences that share homologous but not identical motifs will still produce a significant inner product.
+
+\subsection{Weighted Mismatch Neighbourhood}\label{sec:weighted-mismatch}
+
+The standard formulation of the mismatch kernel employs a strict binary cutoff: neighbors within distance $m$ receive a weight of $1$, and those beyond receive $0$. While effective, this step-function approach treats a perfect match identically to a match with $m$ errors. To refine this representation, we introduce a continuous decay penalty based on the exact distance.
+
+\begin{definizione}[Weighted Mismatch]\label{def:weighted-mismatch}
+Rather than a binary cutoff, mismatch neighbours are penalized by their exact Hamming distance through a decay factor:
+\begin{equation}\label{eq:weighted-mismatch}
+w(\beta, \alpha) = \lambda^{d_H(\alpha, \beta)} \quad \text{where} \quad \lambda \in [0, 1]
+\end{equation}
+\end{definizione}
+
+This modification ensures a smoother feature space. By weighting the contributions, we mathematically enforce that exact biological matches contribute the maximum similarity score, while near-matches provide a geometrically decreasing degree of support.
+
+\section{Multiple Kernel Learning (MKL)}\label{sec:mkl}
+
+Genomic sequences harbor information across multiple scales. Short $k$-mers might effectively capture localized methylation states or localized transcription factor binding affinities, whereas longer $k$-mers are better suited for identifying wider structural motifs. Relying on a single static value of $k$ limits the classifier's capacity. Multiple Kernel Learning (MKL) addresses this by linearly combining kernels computed at various lengths.
+
+\begin{definizione}[MKL Combination]\label{def:mkl}
+The multiple kernel learning combination aggregates kernels across a range of k-mer lengths with weights $w_k$:
+\begin{equation}\label{eq:mkl}
+K_{\text{MKL}}(x, x') = \sum_{k=k_{\min}}^{k_{\max}} w_k \, K_k(x, x')
+\end{equation}
+\end{definizione}
+
+To optimize this aggregation, the weighting parameters $w_k$ can be structured as a linear ramp. This strategy artificially suppresses the contribution of excessively short $k$-mers, which are highly abundant and often act as background noise, while emphasizing longer, more uniquely discriminative biological patterns.
+
+The starting point of this ramp ($k_{\min}$) must also be logically constrained by the mismatch tolerance $m$. For example, permitting $m=1$ on a $2$-mer effectively ignores half of the subsequence's informational content. This disproportionate error allowance would flood the feature space with false-positive alignments, negating the utility of tracking short motifs entirely.
+
+\section{Gram Matrix Computation and Normalization}\label{sec:gram}
+
+The execution of kernel methods within a classification or novelty detection framework requires the explicit evaluation of the Gram matrix, which encapsulates all pairwise similarities. 
+
+\subsection{Symmetric Gram Matrix (Training)}\label{sec:gram-symmetric}
+
+During the training phase, the core operation involves mapping the relationships between all available training sequences. 
+
+The Gram matrix entry for training pairs is computed as:
+\begin{equation}\label{eq:gram-entry}
+K_{ij} = \langle \Phi(x_i), \Phi(x_j) \rangle
+\end{equation}
+
+Because the kernel function evaluates a standard inner product, the resulting matrix is inherently symmetric ($K_{ij} = K_{ji}$). This symmetry halves the computational load, as only the upper triangle and the diagonal need to be computed. 
+
+Furthermore, raw inner products scale with the length of the sequences being compared. Without correction, longer sequences will artificially register higher similarity scores simply by virtue of generating more $k$-mers. To ensure that similarity relies purely on compositional overlap, we apply cosine normalization.
+
+The kernel is normalized to correct for varying sequence lengths:
+\begin{equation}\label{eq:gram-normalize}
+\hat{K}_{ij} = \frac{K_{ij}}{\sqrt{K_{ii} K_{jj}}}
+\end{equation}
+
+\subsection{Asymmetric Gram Matrix (Inference)}\label{sec:gram-asymmetric}
+
+Inference requires determining the relationship between an unseen test distribution and the established training support vectors. Unlike the square, symmetric training matrix, the evaluation matrix is generally asymmetric.
+
+The test Gram matrix computes similarities between test and training sequences:
+\begin{equation}\label{eq:gram-test}
+K_{\text{test}}[i, j] = \langle \Phi(x_i^{\text{test}}), \Phi(x_j^{\text{train}}) \rangle
+\end{equation}
+
+A fundamental challenge at this stage is aligning the feature space vocabulary between the independent sequence distributions. Furthermore, applying the proper cosine normalization at inference requires access to the individual geometric lengths of the test sequences in feature space.
+
+Proper normalization at test time utilizes test self-norms alongside training self-norms:
+\begin{equation}\label{eq:gram-test-normalize}
+\hat{K}_{\text{test}}[i, j] = \frac{K_{\text{test}}[i, j]}{\sqrt{K^{\text{test}}_{ii} K^{\text{train}}_{jj}}}
+\end{equation}
+
+By independently calculating the self-norm diagonal for the test set ($K^{\text{test}}_{ii}$), we guarantee that the classifier's spatial decision boundaries are respected, preventing test sequences of differing lengths from systematically skewing the anomaly detection margins.
