@@ -70,8 +70,14 @@ def build_combined_feature_matrix(
     mismatches: int,
     mkl_weights: List[float],
     n_jobs: int = -1,
+    batch_size: int = 20_000,
 ) -> Tuple[sp.csr_matrix, Dict[int, dict]]:
     """Extracts per-k sparse features, applies MKL weights, and hstacks.
+
+    For large N (>batch_size), features are extracted in batches to
+    keep peak memory bounded.  Each batch is converted to CSR immediately,
+    then the batches are vstacked.  This avoids the OOM that occurs when
+    accumulating hundreds of millions of COO triplets in Python lists.
 
     Parameters
     ----------
@@ -85,6 +91,9 @@ def build_combined_feature_matrix(
         One weight per k (length k_max). Zero-weighted k values are skipped.
     n_jobs : int
         Parallelism for feature extraction.
+    batch_size : int
+        Maximum sequences per extraction batch (default: 20_000).
+        Smaller values use less peak memory but add minor overhead.
 
     Returns
     -------
@@ -101,15 +110,49 @@ def build_combined_feature_matrix(
     if not active_ks:
         raise ValueError("No active k-mer sizes after MKL weight filtering.")
 
+    N = len(sequences)
     blocks: List[sp.csr_matrix] = []
     per_k_vocabs: Dict[int, dict] = {}
 
     for k in active_ks:
         weight = mkl_weights[k - 1]
-        logger.info(f"Extracting features for k={k}, m={mismatches} (weight={weight:.4f})...")
-        X_k, vocab = extract_features_weighted(
-            sequences, k, mismatches, mismatch_decay=0.5, n_jobs=n_jobs
-        )
+
+        if N <= batch_size:
+            # Small N: single pass (same as before)
+            logger.info(f"Extracting features for k={k}, m={mismatches} (weight={weight:.4f})...")
+            X_k, vocab = extract_features_weighted(
+                sequences, k, mismatches, mismatch_decay=0.5, n_jobs=n_jobs
+            )
+        else:
+            # Large N: batched extraction to control peak memory.
+            # First batch builds the vocabulary; subsequent batches reuse it.
+            n_batches = (N + batch_size - 1) // batch_size
+            logger.info(
+                f"Extracting features for k={k}, m={mismatches} (weight={weight:.4f}) "
+                f"in {n_batches} batches of ≤{batch_size:,} ..."
+            )
+
+            batch_matrices: List[sp.csr_matrix] = []
+            vocab = None
+
+            for b_idx in range(n_batches):
+                b_start = b_idx * batch_size
+                b_end = min(b_start + batch_size, N)
+                batch_seqs = sequences[b_start:b_end]
+
+                X_batch, vocab = extract_features_weighted(
+                    batch_seqs, k, mismatches, mismatch_decay=0.5,
+                    vocabulary=vocab, n_jobs=n_jobs,
+                )
+                batch_matrices.append(X_batch)
+                logger.info(
+                    f"  Batch {b_idx + 1}/{n_batches}: {b_end - b_start:,} seqs, "
+                    f"nnz={X_batch.nnz:,}"
+                )
+
+            X_k = sp.vstack(batch_matrices, format='csr')
+            del batch_matrices
+
         X_k = X_k.multiply(np.sqrt(weight))
         blocks.append(X_k)
         per_k_vocabs[k] = vocab
