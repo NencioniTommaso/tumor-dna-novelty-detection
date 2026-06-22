@@ -22,3 +22,17 @@ __pycache__/
 
 # Editor directories and files
 .vscode/
+
+#Latex Compiled files
+*.pdf
+*.synctex.gz
+*.aux
+*.out
+*.log
+*.blg
+*.bbl
+*.idx
+*.toc
+*.dvi
+*.fls
+*.fdb_latexmk
