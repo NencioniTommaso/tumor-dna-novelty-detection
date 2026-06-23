@@ -225,7 +225,7 @@ def main():
     )
     parser.add_argument(
         "--held-out-id", type=int, default=7,
-        help="ID of the healthy patient to hold out (2–7, default: 7).",
+        help="ID of the healthy patient to hold out (1–7, default: 7).",
     )
     parser.add_argument(
         "--n-rounds", type=int, default=DEFAULT_N_ROUNDS,

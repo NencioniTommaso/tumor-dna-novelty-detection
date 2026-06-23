@@ -202,18 +202,21 @@ def add_ref_path_arg(parser: argparse.ArgumentParser) -> None:
 
 
 def build_all_healthy_files(data_dir: str) -> list[str]:
-    """Returns ALL 6 available healthy files (Healthy_2 through Healthy_7)."""
-    return [
+    """Returns ALL 7 available healthy files (Healthy_1 through Healthy_7)."""
+    healthy_1 = "/home/tommy/novelty_detection/tumor-dna-novelty-detection/data/Healthy_1_merged_subset_1200000.fa"
+    files = [healthy_1]
+    files.extend([
         os.path.join(data_dir, f"Healthy_{i}_merged_subset_1200000.fa")
         for i in range(2, 8)
-    ]
+    ])
+    return files
 
 
 def build_loo_folds(data_dir: str, tumor_file: str) -> list[dict]:
-    """Generate Leave-One-Out folds over all 6 healthy patients.
+    """Generate Leave-One-Out folds over all 7 healthy patients.
 
     Each fold holds out one healthy patient for testing and uses the
-    remaining 5 for training.  The single *tumor_file* is included in
+    remaining 6 for training.  The single *tumor_file* is included in
     every fold's test set.
 
     Returns
@@ -265,30 +268,38 @@ def build_loo_single_fold(data_dir: str, held_out_id: int) -> dict:
     data_dir : str
         Path to the directory containing the FASTA files.
     held_out_id : int
-        ID of the healthy patient to hold out (2–7).
+        ID of the healthy patient to hold out (1–7).
 
     Returns
     -------
     dict
         Keys:
-        - ``train_files``: list of 5 healthy FASTA paths
+        - ``train_files``: list of 6 healthy FASTA paths
         - ``held_out_file``: path to the held-out healthy FASTA
         - ``tumor_files``: list of 3 tumor FASTA paths
         - ``fold_name``: e.g. ``"LOO_Healthy_7"``
     """
-    all_ids = list(range(2, 8))         #TODO: Change to (1, 8) after H1 is unzipped.
+    all_ids = list(range(1, 8))
     if held_out_id not in all_ids:
         raise ValueError(
             f"held_out_id must be in {all_ids}, got {held_out_id}"
         )
 
-    held_out_file = os.path.join(
-        data_dir, f"Healthy_{held_out_id}_merged_subset_1200000.fa"
-    )
-    train_files = [
-        os.path.join(data_dir, f"Healthy_{i}_merged_subset_1200000.fa")
-        for i in all_ids if i != held_out_id
-    ]
+    if held_out_id == 1:
+        held_out_file = "/home/tommy/novelty_detection/tumor-dna-novelty-detection/data/Healthy_1_merged_subset_1200000.fa"
+    else:
+        held_out_file = os.path.join(
+            data_dir, f"Healthy_{held_out_id}_merged_subset_1200000.fa"
+        )
+    
+    train_files = []
+    for i in all_ids:
+        if i == held_out_id:
+            continue
+        if i == 1:
+            train_files.append("/home/tommy/novelty_detection/tumor-dna-novelty-detection/data/Healthy_1_merged_subset_1200000.fa")
+        else:
+            train_files.append(os.path.join(data_dir, f"Healthy_{i}_merged_subset_1200000.fa"))
     tumor_files = build_tumor_files(data_dir)
 
     return {
