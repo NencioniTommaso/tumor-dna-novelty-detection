@@ -1,7 +1,17 @@
 \chapter{Context and Problem Formulation}\label{ch:context}
 
 \section{Introduction}
-Liquid biopsy shifts the diagnostic focus from direct tissue extraction, which is by nature invasive, carries risks for the patient and can be unfeasible for inaccessible sites, towards a non-invasive paradigm built upon cell-free DNA (cfDNA) circulating in the bloodstream.
+Liquid biopsy is a minimally invasive diagnostic technique that analyses tumour-derived biomarkers, such as cell-free DNA (cfDNA), circulating tumour cells (CTCs), and exosomes, from a standard peripheral blood draw. 
+Because the procedure requires only a venous sample, it can be repeated over time to monitor disease progression and treatment response, making it an increasingly attractive tool for early cancer detection and monitoring.
+
+\begin{figure}[hbt!]
+    \centering
+    \includegraphics[width=0.35\textwidth]{img/blood_sample}
+    \caption{Content of a blood sample collected for liquid biopsy.}
+    \label{fig:blood-sample}
+\end{figure}
+
+Liquid biopsy shifts the diagnostic focus from direct tissue extraction, which is by nature invasive, carries risks for the patient and can be unfeasible for inaccessible sites, towards a non-invasive paradigm built upon cfDNA circulating in the bloodstream.
 This type of analysis carries its own set of challenges, which can be summarized in three main categories: 
 \begin{itemize}
     \item \textbf{Low Abundance of Target Signal:} Especially in early-stage cancer patients tumor-derived cfDNA (ctDNA) represents a small fraction of the total circulating DNA.
@@ -11,18 +21,32 @@ This type of analysis carries its own set of challenges, which can be summarized
     \item \textbf{Overwhelming Physiological Background Noise:} The vast majority of circulating DNA in an oncology patient originates from normal cells and not from the tumor. In other words, the tumoral signal is buried under a massive physiological background noise. 
 \end{itemize}
 
+\begin{figure}[hbt!]
+    \centering
+    \includegraphics[width=0.8\textwidth]{img/liquidbiopsy3_nobg.png}
+    \caption{Steps for a liquid biopsy.}
+    \label{fig:liquidbiopsy3}
+\end{figure}
+
+
 To enable computational analysis, circulating cell-free DNA fragments isolated from liquid biopsies must be digitized into alphanumeric sequences. 
-This digitization is executed via third-generation Oxford Nanopore Technology (ONT) sequencing, which measures the disruptions of an applied current across a membrane embedded with protein nanopores. As a single-stranded DNA fragment translocates through the pore, different nucleotide combinations block the channel to varying degrees, yielding a continuous current signal. 
+This digitization is executed via third-generation Oxford Nanopore Technology (ONT) sequencing, which measures the disruptions of an applied current across a membrane embedded with protein nanopores. 
+As a single-stranded DNA fragment translocates through the pore, different nucleotide combinations block the channel to varying degrees, yielding a continuous current signal. 
+
+\begin{figure}[hbt!]
+    \centering
+    \includegraphics[width=0.8\textwidth]{img/ONT}
+    \caption{Oxford Nanopore Technology sequencing.}
+    \label{fig:ont}
+\end{figure}
 
 Crucially, because this platform sequences native, unamplified DNA strands, the raw current fluctuations preserve the signatures of epigenetic modifications. Downstream machine learning basecallers can therefore process this continuous signal to differentiate not only the canonical bases ($A$, $C$, $G$, $T$) but also modified variants such as 5-methylcytosine ($M$) and 5-hydroxymethylcytosine ($H$).
 
 These DNA sequences are stored inside .fa (fasta) files, which compose the dataset used in this thesis.
-
-%(maybe insert a diagram like innocenti)
 
 \section{Core Idea}\label{sec:core-idea}
 In the context of this study, each patient's liquid biopsy profile is represented by a collection of raw sequencing reads stored in a FASTA (.fa) format. 
 Because circulating tumor signals are extraordinarily heterogeneous and mutationally unstable, attempting to define a universal ``cancer profile'' for supervised classification is highly impractical. Instead, this thesis relies on an unsupervised novelty detection paradigm: we aim to map the strict boundaries of what constitutes a ``healthy'' genomic and epigenetic baseline. Once this normative boundary is established, we can infer the presence of malignancy in a new patient by measuring how far their sequencing reads deviate from this baseline.
 
 To achieve this computationally, a DNA sequence is treated as a finite string of characters drawn from an extended epigenetic alphabet $\Sigma = \{A, C, G, T, M, H\}$. 
-By mapping these sequences into a high-dimensional feature space using a mismatch string kernel, we can train a One-Class Support Vector Machine ($\nu$-SVC) to mathematically circumscribe the healthy sequences within a tight bounding boundary, establishing our definitive threshold for anomaly detection.
+By mapping these sequences into a high-dimensional feature space using a mismatch string kernel, we can train a One-Class Support Vector Machine ($\nu$-SVM) to mathematically circumscribe the healthy sequences within a tight bounding boundary, establishing a threshold for anomaly detection.

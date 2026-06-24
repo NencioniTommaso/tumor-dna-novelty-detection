@@ -36,3 +36,4 @@ __pycache__/
 *.dvi
 *.fls
 *.fdb_latexmk
+*.lof

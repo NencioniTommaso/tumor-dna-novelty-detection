@@ -5,6 +5,13 @@
 Novelty detection is a specialized branch of machine learning focused on identifying new or unknown patterns within a dataset that differ significantly from the data observed during training. 
 Unlike standard binary classification, where the algorithm is exposed to both positive and negative examples during the learning phase, novelty detection operates under the assumption that the training set consists only of ``normal'' instances. 
 
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.6\textwidth]{img/novelty3.png}
+    \caption{Binary classification versus novelty detection.}
+    \label{fig:novelty3}
+\end{figure}
+
 \begin{definizione}[Novelty Detection]\label{def:novelty}
 Given a training dataset $X = \{x_1, x_2, \ldots, x_n\}$ drawn from an unknown underlying probability distribution $P$ representing the normal class, the objective of novelty detection is to learn a decision function $f: \mathcal{X} \to \mathbb{R}$ such that:
 \begin{equation}\label{eq:novelty-decision}
@@ -16,8 +23,22 @@ f(x) \begin{cases}
 The function $f(x)$ effectively defines a boundary encompassing the support of the distribution $P$ within the feature space.
 \end{definizione}
 
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.6\textwidth]{img/novelty1.png}
+    \caption{A one-class novelty detector identifying novelty points.}
+    \label{fig:novelty1}
+\end{figure}
+
 It is fundamental to distinguish novelty detection from outlier detection. While both aim to find anomalous data points, outlier detection is typically a task where anomalies are already present and mixed within the training set, and the goal is to isolate them. 
 Instead, novelty detection is an inductive task: the model is built exclusively on a clean, normal training set and is subsequently applied to classify unseen test data as either normal or novel.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\textwidth]{img/novelty2.png}
+    \caption{Difference between outlier detection and novelty detection.}
+    \label{fig:novelty2}
+\end{figure}
 
 In our applied case of cancer detection using cell-free DNA (cfDNA), this mathematical formulation is exceptionally useful. Obtaining a comprehensive dataset that characterizes all possible variations of tumor-derived cfDNA is practically impossible, as cancer mutations are highly heterogeneous and vary widely among patients. 
 However, collecting blood samples from healthy individuals to model ``normal'' cfDNA profiles is relatively straightforward. 
@@ -26,12 +47,30 @@ Consequently, any cfDNA sequence that deviates significantly from this baseline 
 
 \section{One-Class Support Vector Machine}\label{sec:ocsvm}
 
-Support Vector Machines (SVMs) are a powerful class of machine learning algorithms traditionally utilized for binary classification. The core principle of a standard SVM is to find an optimal hyperplane that separates two distinct classes of data in a high-dimensional feature space, maximizing the margin between them. This margin is defined as the distance between the hyperplane and the closest data points from either class, which are appropriately named the \textit{support vectors}. By maximizing this margin, SVMs achieve robust generalization capabilities on unseen data.
+Support Vector Machines (SVMs) are a powerful class of machine learning algorithms traditionally utilized for binary classification. The core principle of a standard SVM is to find an optimal hyperplane that separates two distinct classes of data in a high-dimensional feature space, maximizing the margin between them. This margin is defined as the distance between the hyperplane and the closest data points from either class, which are appropriately named the \textit{support vectors}. 
+By maximizing this margin, SVMs achieve robust generalization capabilities on unseen data.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{img/svm1.jpg}
+    \hfill
+    \includegraphics[width=0.45\textwidth]{img/svm2.png}
+    \caption{Support Vector Machine concepts.}
+    \label{fig:svm}
+\end{figure}
+
 
 While traditional SVMs require labeled examples from multiple classes, the \textit{One-Class} Support Vector Machine (OC-SVM) adapts this principle for novelty detection, where only data from a single ``normal'' class is available during training.
 
 \subsection{Formulation}\label{sec:ocsvm-formulation}
 The One-Class Support Vector Machine (OC-SVM), introduced by Schölkopf et al. (2001), approaches the novelty detection problem by attempting to separate the training data from the origin in the feature space $\mathcal{H}$ with maximum margin.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.6\textwidth]{img/ocsvm1.png}
+    \caption{One-Class Support Vector Machine.}
+    \label{fig:ocsvm}
+\end{figure}
 The primal optimization problem is formulated as:
 \begin{equation}\label{eq:ocsvm-primal}
 \min_{w, \rho, \xi} \frac{1}{2}\|w\|^2 - \rho + \frac{1}{\nu n} \sum_{i=1}^n \xi_i
@@ -46,7 +85,7 @@ The hyperparameter $\nu \in (0, 1]$ is the single tuneable constant of the One-C
 From a regularisation perspective, $\nu$ controls the trade-off between the volume of the decision region and the empirical error on the training set. A small $\nu$ favours a tight, selective boundary that encloses nearly all training points, yielding an aggressive model that flags even minor deviations from the training distribution. A large $\nu$ relaxes the boundary, permitting a broader region of normality and a more conservative anomaly detector. In the dual formulation, the relationship between $\nu$ and the box constraint on the Lagrange multipliers $\alpha_i \leq \frac{1}{\nu n}$ makes this trade-off explicit: lower $\nu$ increases the upper bound on individual $\alpha_i$, concentrating the decision function on fewer, more influential support vectors; higher $\nu$ distributes influence more broadly across the training set.
 
 To solve this optimization problem practically, we construct the Lagrangian and derive its dual form. 
-The dual problem relies entirely on the inner products between training vectors, making it perfectly suited for the kernel trick application discussed in Chapter \ref{ch:kernel}   \textbf{(see if full formula in paper)}:
+The dual problem relies entirely on the inner products between training vectors, making it perfectly suited for the kernel trick application discussed in Chapter \ref{ch:kernel}:
 \begin{equation}\label{eq:ocsvm-dual}
 \min_{\alpha} \frac{1}{2} \sum_{i=1}^n \sum_{j=1}^n \alpha_i \alpha_j K(x_i, x_j)
 \end{equation}
@@ -75,14 +114,17 @@ These continuous scores provide a much more informative evaluation than strict b
 
 In practice, when implementing this approach, we precompute the kernel matrix using the string kernels described in Chapter \ref{ch:kernel} and provide this matrix to standard software solvers (such as \texttt{scikit-learn}'s \texttt{OneClassSVM} configured with \texttt{kernel='precomputed'}). The solver then efficiently determines the support vectors and the $\alpha_i$ weights, allowing us to compute the anomaly scores that will then need to be used for patient-level inference.
 
-\section{Theoretical Equivalence of $\nu$-SVC and SVDD under Unit-Norm Transformation}\label{sec:svdd-equivalence}
+\section{Theoretical Equivalence of $\nu$-SVM and SVDD under Unit-Norm Transformation}\label{sec:svdd-equivalence}
 The Support Vector Data Description (SVDD) identifies anomalies by enclosing target training data within a hypersphere of minimal volume. Alternatively, the One-Class Support Vector Machine ($\nu$-SVC) operates by placing a maximal margin hyperplane that separates the dataset from the origin. While geometrically distinct in raw feature space, Tax and Duin demonstrate that these solutions become comparable when the data vectors are transformed to possess a unit norm.
 
 This equivalence is explicitly verified through the dual optimization formulations. The standard SVDD dual objective seeks to maximize:
 $$L=\sum_{i}\alpha_{i}(x_{i}\cdot x_{i})-\sum_{i,j}\alpha_{i}\alpha_{j}(x_{i}\cdot x_{j})$$
-subject to the equality constraint $\sum_{i}\alpha_{i}=1$. When a precomputed Gram matrix is explicitly normalized such that the diagonal elements are unity ($K_{ii}=1$), the inner product $(x_{i}\cdot x_{i})$ evaluates to $1$ for all samples. Substituting this into the first term of the objective function, and applying the sum-to-one equality constraint, the entire first term collapses to exactly $1$.
+subject to the equality constraint $\sum_{i}\alpha_{i}=1$. When a precomputed Gram matrix is explicitly normalized such that the diagonal elements are unity ($K_{ii}=1$), the inner product $(x_{i}\cdot x_{i})$ evaluates to $1$ for all samples. 
+Substituting this into the first term of the objective function, and applying the sum-to-one equality constraint, the entire first term collapses to exactly $1$.
 
-The SVDD optimization thus reduces to maximizing $1-\sum_{i,j}\alpha_{i}\alpha_{j}K_{ij}$. Because maximizing the negative quadratic form is mathematically equivalent to minimizing the positive quadratic form, the objective aligns strictly with the standard $\nu$-SVC dual problem, which minimizes $\frac{1}{2}\sum_{i,j}\alpha_{i}\alpha_{j}K_{ij}$. Consequently, applying an $L_2$ normalization to a kernel matrix prior to $\nu$-SVC training forces the solver to converge on the identical support vectors and decision boundary as an SVDD model, provided the capacity parameters are scaled inversely according to the relation $C=\frac{1}{\nu N}$.
+The SVDD optimization thus reduces to maximizing $1-\sum_{i,j}\alpha_{i}\alpha_{j}K_{ij}$. 
+Because maximizing the negative quadratic form is mathematically equivalent to minimizing the positive quadratic form, the objective aligns strictly with the standard $\nu$-SVC dual problem, which minimizes $\frac{1}{2}\sum_{i,j}\alpha_{i}\alpha_{j}K_{ij}$. 
+Consequently, applying an $L_2$ normalization to a kernel matrix prior to $\nu$-SVM training forces the solver to converge on the identical support vectors and decision boundary as an SVDD model, provided the capacity parameters are scaled inversely according to the relation $C=\frac{1}{\nu N}$.
 
 \section{Patient-Level Aggregation: Multiple Instance Learning}\label{sec:mil}
 

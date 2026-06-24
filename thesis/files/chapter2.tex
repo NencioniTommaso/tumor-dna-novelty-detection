@@ -27,20 +27,27 @@ This substitution is known as the ``kernel trick''. The power of the kernel tric
 
 For a function $k(x, x')$ to be considered a valid kernel that computes a dot product in some feature space $\mathcal{H}$, it must satisfy specific mathematical properties. Primarily, the kernel must be symmetric and give rise to a positive definite Gram matrix for any set of input patterns.
 
-Any positive definite kernel can be associated with a Reproducing Kernel Hilbert Space (RKHS). In this functional space, the kernel acts as the representer of evaluation, meaning that for any function $f \in \mathcal{H}$, the reproducing property holds:
+Any positive definite kernel can be associated with a Reproducing Kernel Hilbert Space (RKHS). In this functional space, the kernel acts as the representer of evaluation. The dot ($\cdot$) in the notation $k(x, \cdot)$ acts as a placeholder for a free variable: while the first argument is fixed to a specific data point $x$, the second argument is left open, transforming the two-variable kernel into a function of just one variable. For any function $f \in \mathcal{H}$, the reproducing property holds:
 
 \begin{equation}\label{eq:reproducing-property}
 \langle f, k(x, \cdot) \rangle = f(x)
 \end{equation}
 
-Consequently, taking the dot product of the kernel with itself yields the kernel function evaluated at those points:
+This equation states that taking the inner product of any function $f$ in the Hilbert space $\mathcal{H}$ with the partially-fixed kernel function $k(x, \cdot)$ results simply in the function $f$ evaluated at the point $x$. 
+The kernel effectively ``reproduces'' the evaluation of the function. 
+
+Consequently, by substituting the generic function $f$ with another kernel function $k(x', \cdot)$, taking the dot product of the kernel with itself yields the kernel function evaluated at those original points:
 
 \begin{equation}\label{eq:kernel-dot}
 \langle k(x, \cdot), k(x', \cdot) \rangle = k(x, x')
 \end{equation}
 
+This is the most powerful consequence of the reproducing property and the foundation of the kernel trick. 
+It guarantees that the inner product of two feature mappings in the high-dimensional Hilbert space is exactly equal to the original kernel function evaluated on the original points $x$ and $x'$. 
+
+The theoretical justification for why such feature spaces exist is provided by Mercer's Theorem. 
 \begin{teorema}[Mercer's Theorem]\label{thm:mercer}
-The theoretical justification for why such feature spaces exist is provided by Mercer's Theorem. A symmetric, real-valued function $k \in L_{\infty}(\mathcal{X}^2)$ corresponds to a dot product in a feature space if the integral operator associated with it is positive definite. Specifically, for all functions $f \in L_2(\mathcal{X})$, the kernel must satisfy the condition:
+A symmetric, real-valued function $k \in L_{\infty}(\mathcal{X}^2)$ corresponds to a dot product in a feature space if the integral operator associated with it is positive definite. Specifically, for all functions $f \in L_2(\mathcal{X})$, the kernel must satisfy the condition:
 \begin{equation}\label{eq:mercer-condition}
 \int_{\mathcal{X}^2} k(x, x') f(x) f(x') \, d\mu(x) d\mu(x') \geq 0
 \end{equation}
@@ -68,6 +75,12 @@ The spectrum feature map for a sequence $x$ at k-mer length $k$ is defined as th
 \end{definizione}
 
 In this representation, each coordinate corresponds to the number of times a specific $k$-mer appears in the input sequence. Because any given sequence of length $n$ contains at most $n - k + 1$ distinct $k$-mers, the resulting feature vector is highly sparse, even though the theoretical dimensionality of the space ($|\Sigma|^k$) can be exceptionally large.
+
+\paragraph{Example (Spectrum Feature Map)}
+Consider a simplified alphabet $\Sigma = \{\text{A}, \text{C}, \text{G}, \text{T}\}$ and $k=3$. Let $x = \text{ACGAG}$ be a short sequence. 
+The sequence contains exactly three overlapping $3$-mers: \texttt{ACG}, \texttt{CGA}, and \texttt{GAG}.
+Therefore, the spectrum feature map $\Phi_3(x)$ will be a high-dimensional vector where the coordinates corresponding to \texttt{ACG}, \texttt{CGA}, and \texttt{GAG} each have a count of $1$. All other $4^3 - 3 = 61$ dimensions in the feature space evaluate to $0$. 
+If another sequence $y$ shares none of these exact $3$-mers, their inner product $\langle \Phi_3(x), \Phi_3(y) \rangle$ will evaluate to strictly zero.
 
 \begin{definizione}[Spectrum Kernel]\label{def:spectrum-kernel}
 The spectrum kernel is the inner product of the spectrum feature representations:
@@ -101,6 +114,18 @@ The feature map for a full sequence $x$ is obtained by summing over all k-mers i
 \end{definizione}
 
 By expanding the feature representation additively over the mismatch neighborhood, a single $k$-mer observation contributes not only to its exact corresponding coordinate but also to the coordinates of all its $m$-mismatch neighbors. Consequently, sequences that share homologous but not identical motifs will still produce a significant inner product.
+
+\paragraph{Example (Mismatch Neighbourhood)}
+Following the previous example with $\Sigma = \{\text{A}, \text{C}, \text{G}, \text{T}\}$ and $k=3$, suppose we allow a mismatch tolerance of $m=1$. 
+Let us consider the single $3$-mer $\alpha = \text{\texttt{ACG}}$. Its $(3,1)$-mismatch neighbourhood $N_{(3,1)}(\text{\texttt{ACG}})$ consists of the exact sequence itself and all sequences that differ by exactly one character. Specifically, it includes:
+\begin{itemize}
+    \item \textbf{Distance $0$ (Exact match):} \texttt{ACG}
+    \item \textbf{Distance $1$ (Position 1 changed):} \texttt{CCG}, \texttt{GCG}, \texttt{TCG}
+    \item \textbf{Distance $1$ (Position 2 changed):} \texttt{AAG}, \texttt{AGG}, \texttt{ATG}
+    \item \textbf{Distance $1$ (Position 3 changed):} \texttt{ACA}, \texttt{ACC}, \texttt{ACT}
+\end{itemize}
+In the mismatch feature map $\Phi_{(3,1)}(x)$, an observation of \texttt{ACG} in the sequence will result in a $+1$ increment for all 10 of these coordinates. 
+If another sequence contains the near-match \texttt{ACT}, the two sequences will share multiple active coordinates in their feature vectors, resulting in a positive similarity score despite lacking an exact $k$-mer match.
 
 \subsection{Weighted Mismatch Neighbourhood}\label{sec:weighted-mismatch}
 
