@@ -24,7 +24,7 @@ __pycache__/
 .vscode/
 
 #Latex Compiled files
-*.pdf
+thesis.pdf
 *.synctex.gz
 *.aux
 *.out

@@ -194,3 +194,68 @@ Proper normalization at test time utilizes test self-norms alongside training se
 \end{equation}
 
 By independently calculating the self-norm diagonal for the test set ($K^{\text{test}}_{ii}$), we guarantee that the classifier's spatial decision boundaries are respected, preventing test sequences of differing lengths from systematically skewing the anomaly detection margins.
+
+\section{Kernel Approximation via the Nystr\"{o}m Method}\label{sec:nystrom-theory}
+
+\subsection{The Computational Bottleneck}\label{sec:nystrom-bottleneck}
+
+While the exact Gram matrix provides a flawless representation of the geometric similarities in the feature space, its explicit construction introduces a severe computational bottleneck. For a dataset of $N$ sequences, calculating the exact symmetric Gram matrix requires computing and storing $N(N+1)/2$ unique dot products. Both the time complexity and the memory footprint scale quadratically, $O(N^2)$. 
+
+For the massive datasets typical in genomic studies---where liquid biopsy samples can yield millions of reads---computing the exact matrix becomes intractable. For example, storing an exact Gram matrix for $100\,000$ sequences in 64-bit floating-point precision demands approximately $80$\,GB of RAM. Consequently, to utilize robust kernel methods on such large cohorts without requiring highly specialized hardware, we must employ a low-rank approximation strategy.
+
+\subsection{Mathematical Formulation}\label{sec:nystrom-math}
+
+The Nystr\"{o}m method is a technique used to generate a low-rank approximation of a large positive semi-definite Gram matrix. The core intuition relies on selecting a small subset of training samples to act as a representative basis, rather than computing all pairwise similarities.
+
+Let $X$ be the full dataset of $N$ samples. We select $m$ samples uniformly at random to serve as ``landmark'' points, where $m \ll N$. These landmarks form the subset $X_m$. We can then define two sub-matrices based on kernel evaluations:
+\begin{itemize}
+    \item $W$: The $m \times m$ landmark kernel matrix, where $W_{ij} = K(x_i, x_j)$ for $x_i, x_j \in X_m$.
+    \item $C$: The $N \times m$ cross-kernel matrix, where $C_{ij} = K(x_i, x_j)$ for $x_i \in X$ and $x_j \in X_m$.
+\end{itemize}
+
+The standard Nystr\"{o}m approximation $\tilde{K}$ for the full Gram matrix $K$ is given by:
+\begin{equation}\label{eq:nystrom-approx}
+\tilde{K} = C W^{-1} C^T
+\end{equation}
+
+By utilizing this approximation, the computational complexity drops from $O(N^2)$ to $O(N \cdot m + m^3)$, effectively linearizing the cost with respect to the total dataset size $N$, since $m$ is relatively small.
+
+To apply this approximation within our Support Vector Machine framework, it is advantageous to extract an explicit, low-dimensional dense feature map $\Phi_{\text{Nys}} \in \mathbb{R}^{N \times m}$ such that $\tilde{K} = \Phi_{\text{Nys}} \Phi_{\text{Nys}}^T$.
+Because $W$ is positive semi-definite, we can compute its eigendecomposition:
+\begin{equation}\label{eq:w-eigendecomp}
+W = V \Lambda V^T
+\end{equation}
+where $V$ contains the eigenvectors and $\Lambda$ is the diagonal matrix of eigenvalues. We can then compute the inverse square root of $W$:
+\begin{equation}\label{eq:w-inv-sqrt}
+W^{-1/2} = V \Lambda^{-1/2} V^T
+\end{equation}
+
+The explicit feature projection for the entire dataset is defined as:
+\begin{equation}\label{eq:nystrom-feature-map}
+\Phi_{\text{Nys}} = C W^{-1/2}
+\end{equation}
+
+This mapping projects the highly sparse string kernel representation into a dense, $m$-dimensional Euclidean space. Consequently, instead of solving a non-linear kernel SVM using the intractable $N \times N$ Gram matrix, we can train a significantly faster linear Support Vector Machine directly on the dense features $\Phi_{\text{Nys}}$, while theoretically maintaining the non-linear decision boundary defined by the mismatch string kernel.
+
+\subsection{Measuring Approximation Fidelity}\label{sec:nystrom-metrics-theory}
+
+Because the Nystr\"{o}m method is a low-rank approximation, it inherently introduces an error matrix $E = K - \tilde{K}$. To quantify the quality of the approximation and validate the chosen number of landmarks $m$, we define three intrinsic mathematical metrics:
+
+\begin{enumerate}
+    \item \textbf{Relative Frobenius Error:} This measures the global element-wise deviation across the entire matrix. It is defined using the Frobenius norm:
+    \begin{equation}\label{eq:frob-error}
+    \epsilon_F = \frac{\|K - \tilde{K}\|_F}{\|K\|_F} = \frac{\sqrt{\sum_{i,j} (K_{ij} - \tilde{K}_{ij})^2}}{\|K\|_F}
+    \end{equation}
+
+    \item \textbf{Relative Spectral Error:} This evaluates the maximum distortion introduced to the geometric structure of the feature space, computed via the spectral norm ($L_2$ operator norm), which corresponds to the largest singular value of the error matrix:
+    \begin{equation}\label{eq:spectral-error}
+    \epsilon_2 = \frac{\|K - \tilde{K}\|_2}{\|K\|_2}
+    \end{equation}
+
+    \item \textbf{Diagonal Error:} The exact mismatch kernel relies on cosine normalization, ensuring that the self-similarity for every sequence is exactly $1$ ($K_{ii} = 1$). The diagonal error evaluates how well these self-similarities (or sequence lengths in the feature space) are preserved by the approximation. It is captured by the maximum and mean deviations:
+    \begin{equation}\label{eq:diag-error}
+    \epsilon_{\text{diag-max}} = \max_i |K_{ii} - \tilde{K}_{ii}|, \quad \epsilon_{\text{diag-mean}} = \frac{1}{N} \sum_{i=1}^N |K_{ii} - \tilde{K}_{ii}|
+    \end{equation}
+\end{enumerate}
+
+Minimizing these intrinsic errors guarantees that the explicit dense projection $\Phi_{\text{Nys}}$ remains geometrically faithful to the exact mismatch string kernel space.

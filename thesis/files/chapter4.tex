@@ -25,10 +25,12 @@ The raw DNA sequences are transformed into numerical representations. For a give
 Because varying the length $k$ captures different biological motifs, we utilize Multiple Kernel Learning (MKL). Features from different $k$-mer lengths are weighted and concatenated into a unified sparse representation (\texttt{features.py}).
 
 \subsection{Kernel Computation}
-Once the sparse features are extracted, the system computes the exact Gram matrix representing the pairwise similarities between all sequences in the training set (\texttt{gram.py}). 
-This symmetric matrix is evaluated using the dot product of the weighted $k$-mer frequency vectors. 
-Because computing an exact Gram matrix requires $O(N^2)$ time and memory, our pipeline also includes an optional Nystr\"{o}m approximation module (\texttt{nystrom.py}). 
-The Nystr\"{o}m method projects the sparse counts into a low-dimensional dense space using a subset of ``landmark'' sequences, drastically reducing the complexity for massive datasets.
+Once the sparse features are extracted, the system provides two distinct pathways for computing the kernel space representation, depending on the scale of the dataset:
+\begin{itemize}
+    \item \textbf{Exact Baseline (\texttt{gram.py}):} For smaller cohorts or strict validation, the system computes the exact $O(N^2)$ Gram matrix representing all pairwise similarities. This symmetric matrix is evaluated using the dot product of the weighted $k$-mer frequency vectors and serves as the pure mathematical ground truth.
+    \item \textbf{Scalable Projection (\texttt{nystrom.py}):} For massive datasets where the $O(N^2)$ memory footprint is intractable, the system utilizes the Nystr\"{o}m method. Instead of computing similarities between all sequences, it projects the sparse counts into a low-dimensional dense space using a small subset of ``landmark'' sequences, completely bypassing the quadratic bottleneck.
+\end{itemize}
+Both modules rely on the identical Multi-Kernel Learning (MKL) weight generation logic (imported from \texttt{gram.py}), ensuring perfect mathematical alignment between the exact and approximated spaces.
 
 \subsection{Model Training}
 Finally, the computed kernel (or the dense Nystr\"{o}m projection) is fed into a One-Class Support Vector Machine (OC-SVM) from the \texttt{scikit-learn} library. 
@@ -135,3 +137,26 @@ results = Parallel(n_jobs=n_inner_jobs, prefer="threads")(
     for rs, re, cs, ce in tasks
 )
 \end{lstlisting}
+
+\subsection{Nystr\"{o}m Projection Pipeline}\label{sec:nystrom-arch}
+While block-partitioning enables the exact evaluation of moderately sized datasets, scaling to our target of $120\,000$ sequences renders even block-wise Gram matrix computation entirely intractable due to the absolute memory storage requirements. To resolve this, the \texttt{nystrom.py} module implements a highly scalable projection pipeline that avoids computing any massive intermediate matrices.
+
+Rather than explicitly generating $X \cdot X^T$, the pipeline operates directly on the sparse feature representations and performs the mathematically equivalent Nystr\"{o}m projection in memory-efficient stages. First, a subset of $m$ landmark sequences is randomly selected, and only the small $m \times m$ landmark kernel $W$ is explicitly computed and eigen-decomposed. Then, the cross-kernel $C$ is computed and multiplied by $W^{-1/2}$ to immediately yield the dense $N \times m$ projection $\Phi$.
+
+To ensure absolute consistency with the exact kernel computation, \texttt{nystrom.py} imports the identical MKL weight generation logic (\texttt{generate\_mkl\_weights}) directly from \texttt{gram.py}.
+
+\begin{lstlisting}[language=Python, caption={Nystr\"{o}m feature projection in \texttt{nystrom.py}, bypassing the $O(N^2)$ bottleneck.}, label={lst:nystrom}]
+# 1. Extract sparse features directly
+X_combined, per_k_vocabs = build_combined_feature_matrix(
+    sequences=train_data, max_k=6, mismatches=1, mkl_weights=weights
+)
+X_norm_train, _ = normalize_rows(X_combined)
+
+# 2. Fit Nystrom (computes W, performs eigendecomposition)
+nystrom_state = nystrom_fit(X_norm_train, m=1200, seed=42)
+
+# 3. Project directly to dense m-dimensional space (computes C * W^{-1/2})
+Phi_train = nystrom_transform(X_norm_train, nystrom_state)
+\end{lstlisting}
+
+Crucially, the pipeline encapsulates the selected landmarks, the pre-computed vocabulary mapping, and the MKL weights into a serialized \texttt{NystromState} artifact. During inference, this artifact guarantees that new test sequences are projected into the exact same dense mathematical space before being evaluated by the linear OC-SVM.
