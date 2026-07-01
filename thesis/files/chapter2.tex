@@ -23,6 +23,15 @@ k(x, x') := \langle \mathbf{x}, \mathbf{x'} \rangle = \langle \Phi(x), \Phi(x') 
 
 This substitution is known as the ``kernel trick''. The power of the kernel trick lies in its ability to compute the inner product $\langle \Phi(x), \Phi(x') \rangle$ directly in the input space $\mathcal{X}$ without ever explicitly constructing or evaluating the potentially high-dimensional (or even infinite-dimensional) feature vectors $\Phi(x)$ and $\Phi(x')$. Given an algorithm formulated entirely in terms of a positive definite kernel $k$, one can effortlessly replace $k$ with another positive definite kernel, effectively changing the feature space mapping without altering the underlying dot product-based algorithm.
 
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{img/kernel_trick.png}
+    \hfill
+    \includegraphics[width=0.45\textwidth]{img/kernel2.png}
+    \caption{The kernel trick conceptually mapping input data to a higher-dimensional feature space.}
+    \label{fig:kernel-trick}
+\end{figure}
+
 \subsection{Theoretical Foundations (RKHS and Mercer's Theorem)}\label{sec:rkhs}
 
 For a function $k(x, x')$ to be considered a valid kernel that computes a dot product in some feature space $\mathcal{H}$, it must satisfy specific mathematical properties. Primarily, the kernel must be symmetric and give rise to a positive definite Gram matrix for any set of input patterns.
@@ -236,6 +245,10 @@ The explicit feature projection for the entire dataset is defined as:
 \end{equation}
 
 This mapping projects the highly sparse string kernel representation into a dense, $m$-dimensional Euclidean space. Consequently, instead of solving a non-linear kernel SVM using the intractable $N \times N$ Gram matrix, we can train a significantly faster linear Support Vector Machine directly on the dense features $\Phi_{\text{Nys}}$, while theoretically maintaining the non-linear decision boundary defined by the mismatch string kernel.
+
+During the testing phase, new sequences must be projected using the exact same $m$ landmarks selected during training. The Nystr\"{o}m method establishes a fixed coordinate system where each of the $m$ dimensions represents the geometric similarity to a specific training landmark. 
+Evaluating a new test sequence requires measuring its similarity against those exact same reference points to guarantee spatial consistency. If new landmarks were sampled at test time, the resulting feature space would be defined by a completely different set of basis vectors, and the geometric alignment with the training data would be lost. 
+For this reason, both the training landmarks and the $W^{-1/2}$ matrix must be saved and reused to compute the explicit projection for any unseen data.
 
 \subsection{Measuring Approximation Fidelity}\label{sec:nystrom-metrics-theory}
 
