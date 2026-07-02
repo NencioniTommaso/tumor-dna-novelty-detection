@@ -342,7 +342,7 @@ def main():
         svm = artifact.model
         nystrom_state = artifact.nystrom_state
         N = len(artifact.train_sequences)
-        m = nystrom_state.m
+        m = len(nystrom_state.landmark_indices)
         logger.info(f"Successfully loaded model (m={m}, N={N})")
     else:
         logger.info("")
