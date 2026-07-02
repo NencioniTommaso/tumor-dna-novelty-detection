@@ -328,95 +328,97 @@ def main():
     total_start = time.time()
 
     # ══════════════════════════════════════════════════════════════════
-    # STEP 1: Load training data with index tracking
+    # STEP 1-4: Train or Load Model
     # ══════════════════════════════════════════════════════════════════
-    logger.info("")
-    logger.info("--- Step 1: Loading Training Data (with index tracking) ---")
-    train_data, sampled_indices_per_file = load_training_cohort_tracked_indices(
-        fold["train_files"], args.max_train, args.seed, args.cache_dir,
-    )
-    N = len(train_data)
-    logger.info(f"Loaded {N:,} training sequences from {len(fold['train_files'])} patients")
-
-    # ══════════════════════════════════════════════════════════════════
-    # STEP 2: Extract features and build Nyström approximation
-    # ══════════════════════════════════════════════════════════════════
-    logger.info("")
-    logger.info("--- Step 2: Extracting Features & Building Nyström Approximation ---")
-
-    t0 = time.time()
-
-    X_combined, per_k_vocabs = build_combined_feature_matrix(
-        sequences=train_data,
-        k_max=args.max_k,
-        mismatches=args.mismatches,
-        mkl_weights=mkl_weights,
-        n_jobs=args.n_jobs,
-    )
-
-    # Row-normalize (cosine normalization)
-    X_norm_train, _ = normalize_rows(X_combined)
-    del X_combined
-    gc.collect()
-    logger.info("Training features row-normalized")
-
-    # Compute m from ratio
-    m = max(1, int(args.m_ratio * N))
-    logger.info(f"Nyström: m = {m:,} landmarks (m/N = {args.m_ratio:.2%})")
-
-    # Fit Nyström
-    nystrom_state = nystrom_fit(
-        X_norm_train, m, args.landmark_seed,
-        per_k_vocabs, mkl_weights,
-        args.max_k, args.mismatches,
-    )
-
-    # Transform training data into Nyström feature space
-    Phi_train = nystrom_transform(X_norm_train, nystrom_state, n_jobs=args.n_jobs)
-    del X_norm_train
-    gc.collect()
-
-    feature_time = time.time() - t0
-    logger.info(f"Feature extraction + Nyström fit/transform complete in {feature_time:.1f}s")
-    logger.info(f"Φ_train shape: {Phi_train.shape[0]:,} × {Phi_train.shape[1]:,}")
-
-    # ══════════════════════════════════════════════════════════════════
-    # STEP 3: Fit linear OC-SVM on Nyström features
-    # ══════════════════════════════════════════════════════════════════
-    logger.info("")
-    logger.info(f"--- Step 3: Fitting Linear OC-SVM on Nyström Features (nu={args.nu_param}) ---")
-    svm = OneClassSVM(kernel="linear", nu=args.nu_param)
-    svm.fit(Phi_train)
-    del Phi_train
-    gc.collect()
-
-    train_elapsed = time.time() - total_start
-    logger.info(f"Training complete in {train_elapsed:.1f}s")
-
-    # ══════════════════════════════════════════════════════════════════
-    # STEP 4: Save the trained model
-    # ══════════════════════════════════════════════════════════════════
-    logger.info("")
-    logger.info("--- Step 4: Saving Trained Model ---")
     model_dir = os.path.join(project_root, "models")
     os.makedirs(model_dir, exist_ok=True)
     model_path = os.path.join(model_dir, args.model_name)
 
-    artifact = ModelArtifact(
-        model=svm,
-        train_sequences=train_data,
-        max_k=args.max_k,
-        mismatches=args.mismatches,
-        nu_param=args.nu_param,
-        mkl_weights=mkl_weights,
-        backend="nystrom",
-        nystrom_state=nystrom_state,
-    )
-    save_svm_model(artifact, model_path)
+    if os.path.exists(model_path):
+        logger.info("")
+        logger.info(f"--- Loading Existing Model from {model_path} ---")
+        from src.model_io import load_svm_model
+        artifact = load_svm_model(model_path)
+        svm = artifact.model
+        nystrom_state = artifact.nystrom_state
+        N = len(artifact.train_sequences)
+        m = nystrom_state.m
+        logger.info(f"Successfully loaded model (m={m}, N={N})")
+    else:
+        logger.info("")
+        logger.info("--- Step 1: Loading Training Data (with index tracking) ---")
+        train_data, sampled_indices_per_file = load_training_cohort_tracked_indices(
+            fold["train_files"], args.max_train, args.seed, args.cache_dir,
+        )
+        N = len(train_data)
+        logger.info(f"Loaded {N:,} training sequences from {len(fold['train_files'])} patients")
 
-    # Free training data
-    del train_data
-    gc.collect()
+        logger.info("")
+        logger.info("--- Step 2: Extracting Features & Building Nyström Approximation ---")
+
+        t0 = time.time()
+
+        X_combined, per_k_vocabs = build_combined_feature_matrix(
+            sequences=train_data,
+            k_max=args.max_k,
+            mismatches=args.mismatches,
+            mkl_weights=mkl_weights,
+            n_jobs=args.n_jobs,
+        )
+
+        # Row-normalize (cosine normalization)
+        X_norm_train, _ = normalize_rows(X_combined)
+        del X_combined
+        gc.collect()
+        logger.info("Training features row-normalized")
+
+        # Compute m from ratio
+        m = max(1, int(args.m_ratio * N))
+        logger.info(f"Nyström: m = {m:,} landmarks (m/N = {args.m_ratio:.2%})")
+
+        # Fit Nyström
+        nystrom_state = nystrom_fit(
+            X_norm_train, m, args.landmark_seed,
+            per_k_vocabs, mkl_weights,
+            args.max_k, args.mismatches,
+        )
+
+        # Transform training data into Nyström feature space
+        Phi_train = nystrom_transform(X_norm_train, nystrom_state, n_jobs=args.n_jobs)
+        del X_norm_train
+        gc.collect()
+
+        feature_time = time.time() - t0
+        logger.info(f"Feature extraction + Nyström fit/transform complete in {feature_time:.1f}s")
+        logger.info(f"Φ_train shape: {Phi_train.shape[0]:,} × {Phi_train.shape[1]:,}")
+
+        logger.info("")
+        logger.info(f"--- Step 3: Fitting Linear OC-SVM on Nyström Features (nu={args.nu_param}) ---")
+        svm = OneClassSVM(kernel="linear", nu=args.nu_param)
+        svm.fit(Phi_train)
+        del Phi_train
+        gc.collect()
+
+        train_elapsed = time.time() - total_start
+        logger.info(f"Training complete in {train_elapsed:.1f}s")
+
+        logger.info("")
+        logger.info("--- Step 4: Saving Trained Model ---")
+        artifact = ModelArtifact(
+            model=svm,
+            train_sequences=train_data,
+            max_k=args.max_k,
+            mismatches=args.mismatches,
+            nu_param=args.nu_param,
+            mkl_weights=mkl_weights,
+            backend="nystrom",
+            nystrom_state=nystrom_state,
+        )
+        save_svm_model(artifact, model_path)
+
+        # Free training data
+        del train_data
+        gc.collect()
 
     # ══════════════════════════════════════════════════════════════════
     # STEP 5: Test tumor patients only
