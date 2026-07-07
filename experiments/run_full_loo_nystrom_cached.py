@@ -10,6 +10,8 @@ import gc
 import os
 import sys
 import time
+import uuid
+import shutil
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
@@ -117,6 +119,10 @@ def main():
         per_k_vocabs[k] = build_full_vocabulary(k)
         logger.info(f"Built full vocabulary for k={k} (size={len(per_k_vocabs[k])})")
 
+    run_cache_dir = os.path.join(args.cache_dir, f"nystrom_cache_{uuid.uuid4().hex[:8]}")
+    os.makedirs(run_cache_dir, exist_ok=True)
+    logger.info(f"Using disk cache directory: {run_cache_dir}")
+
     healthy_features_cache = {}
     # We distribute max_train among the 6 files we will use per fold
     seqs_per_file = args.max_train // 6 
@@ -145,7 +151,11 @@ def main():
             n_jobs=args.n_jobs,
         )
         
-        healthy_features_cache[file_path] = (patient_seqs, X_patient)
+        npz_path = os.path.join(run_cache_dir, f"{subject_name}_train.npz")
+        sp.save_npz(npz_path, X_patient)
+        healthy_features_cache[file_path] = (patient_seqs, npz_path)
+        del X_patient
+        gc.collect()
         
     logger.info(f"\nFeature extraction caching completed in {time.time() - t0_cache:.1f}s")
     
@@ -179,7 +189,11 @@ def main():
         X_test_norm, _ = normalize_rows(X_test_combined)
         del X_test_combined
         
-        test_features_cache[file_path] = (test_seqs, X_test_norm)
+        npz_path = os.path.join(run_cache_dir, f"{subject_name}_test.npz")
+        sp.save_npz(npz_path, X_test_norm)
+        test_features_cache[file_path] = (test_seqs, npz_path)
+        del X_test_norm
+        gc.collect()
         
     logger.info(f"\nTest feature caching completed in {time.time() - t0_cache:.1f}s")
     logger.info("=" * 65)
@@ -221,9 +235,9 @@ def main():
         train_data = []
         X_blocks = []
         for f in train_files:
-            seqs, X = healthy_features_cache[f]
+            seqs, npz_path = healthy_features_cache[f]
             train_data.extend(seqs)
-            X_blocks.append(X)
+            X_blocks.append(sp.load_npz(npz_path))
             
         X_combined = sp.vstack(X_blocks, format='csr')
         N = len(train_data)
@@ -289,7 +303,8 @@ def main():
             subject_name = "_".join(os.path.basename(file_path).split("_")[:2])
             logger.info(f"─── Testing: {subject_name} ({label.upper()}) ───")
 
-            test_seqs, X_test_norm = test_features_cache[file_path]
+            test_seqs, npz_path = test_features_cache[file_path]
+            X_test_norm = sp.load_npz(npz_path)
 
             logger.info(f"  Projecting {len(test_seqs)} seqs into Nyström space ...")
             Phi_test = nystrom_transform(X_test_norm, nystrom_state, n_jobs=args.n_jobs)
@@ -321,12 +336,14 @@ def main():
                 "n_sequences": len(test_seqs),
             })
 
-            del Phi_test, anomaly_scores, inverted
+            del X_test_norm, Phi_test, anomaly_scores, inverted
             gc.collect()
             
     # ------------------------------------------------------------------
     # Save Summary
     # ------------------------------------------------------------------
+    shutil.rmtree(run_cache_dir, ignore_errors=True)
+
     logger.info("")
     logger.info("=" * 75)
     logger.info(" ALL FOLDS COMPLETED")
