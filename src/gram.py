@@ -90,6 +90,36 @@ def _compute_gram_block_pair(X_csr: sp.csr_matrix, r_start: int, r_end: int, c_s
     return r_start, r_end, c_start, c_end, block_val
 
 
+def parallel_gram_matrix(X_csr: sp.csr_matrix, n_jobs: int = -1, block_size: int = 1500) -> np.ndarray:
+    """
+    Computes X_csr.dot(X_csr.T).toarray() efficiently in parallel blocks.
+    """
+    N = X_csr.shape[0]
+    K = np.zeros((N, N), dtype=np.float64)
+    
+    if N <= block_size:
+        return X_csr.dot(X_csr.T).toarray()
+        
+    ranges = [(i, min(i + block_size, N)) for i in range(0, N, block_size)]
+    tasks = []
+    for i, (r_start, r_end) in enumerate(ranges):
+        for j, (c_start, c_end) in enumerate(ranges):
+            if j >= i: 
+                tasks.append((r_start, r_end, c_start, c_end))
+                
+    results = Parallel(n_jobs=n_jobs, prefer="threads")(
+        delayed(_compute_gram_block_pair)(X_csr, rs, re, cs, ce)
+        for rs, re, cs, ce in tasks
+    )
+    
+    for rs, re, cs, ce, block_val in results:
+        K[rs:re, cs:ce] = block_val
+        if rs != cs:
+            K[cs:ce, rs:re] = block_val.T
+            
+    return K
+
+
 def _extract_and_compute_gram_k_symmetric(
     sequences: List[str], 
     k: int, 
@@ -189,6 +219,33 @@ def _compute_asymmetric_block_pair(X_test: sp.csr_matrix, X_train: sp.csr_matrix
     """
     block_val = X_test[r_start:r_end].dot(X_train[c_start:c_end].T).toarray()
     return r_start, r_end, c_start, c_end, block_val
+
+
+def parallel_asymmetric_gram_matrix(X_test: sp.csr_matrix, X_train: sp.csr_matrix, n_jobs: int = -1, block_size: int = 1500) -> np.ndarray:
+    """
+    Computes X_test.dot(X_train.T).toarray() efficiently in parallel blocks.
+    """
+    num_test = X_test.shape[0]
+    num_train = X_train.shape[0]
+    
+    if num_test * num_train <= block_size * block_size:
+        return X_test.dot(X_train.T).toarray()
+        
+    K = np.zeros((num_test, num_train), dtype=np.float64)
+    
+    test_ranges = [(i, min(i + block_size, num_test)) for i in range(0, num_test, block_size)]
+    train_ranges = [(i, min(i + block_size, num_train)) for i in range(0, num_train, block_size)]
+    tasks = [(rs, re, cs, ce) for rs, re in test_ranges for cs, ce in train_ranges]
+    
+    results = Parallel(n_jobs=n_jobs, prefer="threads")(
+        delayed(_compute_asymmetric_block_pair)(X_test, X_train, rs, re, cs, ce) 
+        for rs, re, cs, ce in tasks
+    )
+    
+    for rs, re, cs, ce, block_val in results:
+        K[rs:re, cs:ce] = block_val
+        
+    return K
 
 
 def _extract_and_compute_asymmetric_k(

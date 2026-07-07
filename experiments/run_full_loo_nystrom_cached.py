@@ -65,6 +65,8 @@ def main():
                         help="Random seed for Nyström landmark selection (default: 42).")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for data loading (default: 42).")
+    parser.add_argument("--start-fold", type=int, default=1,
+                        help="Fold to start from (1-7). Allows resuming from a specific fold (default: 1).")
     args = parser.parse_args()
 
     all_healthy = build_all_healthy_files(args.data_dir)
@@ -146,6 +148,40 @@ def main():
         healthy_features_cache[file_path] = (patient_seqs, X_patient)
         
     logger.info(f"\nFeature extraction caching completed in {time.time() - t0_cache:.1f}s")
+    
+    # ------------------------------------------------------------------
+    # 0b. Pre-Cache Testing Features (Tumors + All Healthy)
+    # ------------------------------------------------------------------
+    logger.info("\n--- Pre-caching TEST features ---")
+    test_features_cache = {}
+    all_test_files = all_healthy + colo_files
+    
+    for file_path in all_test_files:
+        subject_name = "_".join(os.path.basename(file_path).split("_")[:2])
+        logger.info(f"Extracting test features for {subject_name} ...")
+        
+        rounds = sample_non_overlapping_rounds(
+            fasta_path=file_path,
+            n_rounds=1,
+            seqs_per_round=args.max_test,
+            seed=args.seed,
+            cache_dir=args.cache_dir,
+            excluded_indices=None,
+        )
+        test_seqs = rounds[0]
+        
+        X_test_combined = build_combined_test_features(
+            test_seqs, per_k_vocabs,
+            args.max_k, args.mismatches,
+            mkl_weights,
+            n_jobs=args.n_jobs,
+        )
+        X_test_norm, _ = normalize_rows(X_test_combined)
+        del X_test_combined
+        
+        test_features_cache[file_path] = (test_seqs, X_test_norm)
+        
+    logger.info(f"\nTest feature caching completed in {time.time() - t0_cache:.1f}s")
     logger.info("=" * 65)
 
     # ------------------------------------------------------------------
@@ -154,7 +190,7 @@ def main():
     summary_rows = []
     total_start = time.time()
 
-    for held_out_id in range(1, 8):
+    for held_out_id in range(args.start_fold, 8):
         fold_name = f"LOO_Healthy_{held_out_id}"
         out_dir = os.path.join(base_out_dir, fold_name)
         os.makedirs(out_dir, exist_ok=True)
@@ -253,28 +289,10 @@ def main():
             subject_name = "_".join(os.path.basename(file_path).split("_")[:2])
             logger.info(f"─── Testing: {subject_name} ({label.upper()}) ───")
 
-            rounds = sample_non_overlapping_rounds(
-                fasta_path=file_path,
-                n_rounds=1,
-                seqs_per_round=args.max_test,
-                seed=args.seed,
-                cache_dir=args.cache_dir,
-                excluded_indices=None,
-            )
-            test_seqs = rounds[0]
+            test_seqs, X_test_norm = test_features_cache[file_path]
 
             logger.info(f"  Projecting {len(test_seqs)} seqs into Nyström space ...")
-            X_test_combined = build_combined_test_features(
-                test_seqs, nystrom_state.per_k_vocabs,
-                nystrom_state.max_k, nystrom_state.mismatches,
-                nystrom_state.mkl_weights,
-                n_jobs=args.n_jobs,
-            )
-            X_test_norm, _ = normalize_rows(X_test_combined)
-            del X_test_combined
-
             Phi_test = nystrom_transform(X_test_norm, nystrom_state, n_jobs=args.n_jobs)
-            del X_test_norm
 
             anomaly_scores = svm.decision_function(Phi_test)
             inverted = -anomaly_scores  # higher = more anomalous
@@ -303,7 +321,7 @@ def main():
                 "n_sequences": len(test_seqs),
             })
 
-            del Phi_test, anomaly_scores, inverted, rounds, test_seqs
+            del Phi_test, anomaly_scores, inverted
             gc.collect()
             
     # ------------------------------------------------------------------
@@ -315,9 +333,13 @@ def main():
     logger.info(f" Total execution time: {time.time() - total_start:.1f}s")
     
     summary_path = os.path.join(base_out_dir, f"summary_seed{args.seed}.csv")
-    with open(summary_path, "w", newline="") as fh:
+    file_mode = "a" if args.start_fold > 1 else "w"
+    file_exists = os.path.isfile(summary_path)
+    
+    with open(summary_path, file_mode, newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=["fold", "subject", "label", "mean_score", "std_score", "n_sequences"])
-        writer.writeheader()
+        if file_mode == "w" or not file_exists:
+            writer.writeheader()
         for row in summary_rows:
             writer.writerow(row)
     

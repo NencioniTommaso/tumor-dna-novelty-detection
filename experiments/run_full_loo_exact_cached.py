@@ -19,8 +19,8 @@ import numpy as np
 import scipy.sparse as sp
 from sklearn.svm import OneClassSVM
 
-from src.data_utils import sample_non_overlapping_rounds
-from src.gram import generate_mkl_weights
+from src.features import normalize_rows
+from src.gram import generate_mkl_weights, parallel_gram_matrix, parallel_asymmetric_gram_matrix
 from src.nystrom import (
     build_combined_test_features,
     normalize_rows,
@@ -58,6 +58,10 @@ def main():
                         help="Sequences to infer per test subject (default: 50000).")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for data loading (default: 42).")
+    parser.add_argument("--test-batch-size", type=int, default=10_000,
+                        help="Number of test sequences to process at once (default: 10000).")
+    parser.add_argument("--start-fold", type=int, default=1,
+                        help="Fold to start from (1-7). Allows resuming from a specific fold (default: 1).")
     args = parser.parse_args()
 
     all_healthy = build_all_healthy_files(args.data_dir)
@@ -185,7 +189,7 @@ def main():
     summary_rows = []
     total_start = time.time()
 
-    for held_out_id in range(1, 8):
+    for held_out_id in range(args.start_fold, 8):
         fold_name = f"LOO_Healthy_{held_out_id}"
         out_dir = os.path.join(base_out_dir, fold_name)
         os.makedirs(out_dir, exist_ok=True)
@@ -231,13 +235,16 @@ def main():
         logger.info(f"Row normalization complete in {time.time() - t0:.1f}s")
 
         # ------------------------------------------------------------------
-        # 3. Fit Linear OC-SVM
+        # 3. Fit Linear OC-SVM -> Now Precomputed
         # ------------------------------------------------------------------
-        logger.info("\n--- Step 3: Fitting Linear OC-SVM ---")
+        logger.info("\n--- Step 3: Computing Train Gram Matrix & Fitting OC-SVM ---")
         t0 = time.time()
-        svm = OneClassSVM(kernel="linear", nu=args.nu_param)
-        svm.fit(X_norm_train)
-        del X_norm_train
+        K_train = parallel_gram_matrix(X_norm_train, n_jobs=args.n_jobs)
+        logger.info(f"Train Gram matrix shape: {K_train.shape} computed in {time.time() - t0:.1f}s")
+        
+        svm = OneClassSVM(kernel="precomputed", nu=args.nu_param)
+        svm.fit(K_train)
+        del K_train
         gc.collect()
         logger.info(f"Training complete in {time.time() - t0:.1f}s")
 
@@ -254,7 +261,7 @@ def main():
             mismatches=args.mismatches,
             nu_param=args.nu_param,
             mkl_weights=mkl_weights,
-            backend="exact",
+            backend="precomputed",
             nystrom_state=None,
         )
         save_svm_model(artifact, model_path)
@@ -272,9 +279,22 @@ def main():
             logger.info(f"─── Testing: {subject_name} ({label.upper()}) ───")
 
             test_seqs, X_test_norm = test_features_cache[file_path]
-
-            anomaly_scores = svm.decision_function(X_test_norm)
-            inverted = -anomaly_scores  # higher = more anomalous
+            n_test = X_test_norm.shape[0]
+            
+            all_inverted_scores = []
+            
+            for start_idx in range(0, n_test, args.test_batch_size):
+                end_idx = min(start_idx + args.test_batch_size, n_test)
+                X_batch = X_test_norm[start_idx:end_idx]
+                
+                K_test_batch = parallel_asymmetric_gram_matrix(X_batch, X_norm_train, n_jobs=args.n_jobs)
+                anomaly_scores = svm.decision_function(K_test_batch)
+                inverted = -anomaly_scores  # higher = more anomalous
+                all_inverted_scores.extend(inverted)
+                
+                del K_test_batch, anomaly_scores, inverted
+            
+            inverted = np.array(all_inverted_scores)
 
             # ------------------------------------------------------------------
             # 6. Save Scores
@@ -300,8 +320,11 @@ def main():
                 "n_sequences": len(test_seqs),
             })
 
-            del anomaly_scores, inverted
+            del all_inverted_scores
             gc.collect()
+            
+        del X_norm_train
+        gc.collect()
             
     # ------------------------------------------------------------------
     # Save Summary
@@ -312,9 +335,13 @@ def main():
     logger.info(f" Total execution time: {time.time() - total_start:.1f}s")
     
     summary_path = os.path.join(base_out_dir, f"summary_seed{args.seed}.csv")
-    with open(summary_path, "w", newline="") as fh:
+    file_mode = "a" if args.start_fold > 1 else "w"
+    file_exists = os.path.isfile(summary_path)
+    
+    with open(summary_path, file_mode, newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=["fold", "subject", "label", "mean_score", "std_score", "n_sequences"])
-        writer.writeheader()
+        if file_mode == "w" or not file_exists:
+            writer.writeheader()
         for row in summary_rows:
             writer.writerow(row)
     
