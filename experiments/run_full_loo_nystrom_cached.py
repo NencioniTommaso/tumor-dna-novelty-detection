@@ -69,6 +69,9 @@ def main():
                         help="Random seed for data loading (default: 42).")
     parser.add_argument("--start-fold", type=int, default=1,
                         help="Fold to start from (1-7). Allows resuming from a specific fold (default: 1).")
+    parser.add_argument("--resume-cache-dir", type=str, default=None,
+                        help="Path to an existing cache directory with precomputed .npz files. "
+                             "When set, skips feature extraction and reuses cached matrices.")
     args = parser.parse_args()
 
     all_healthy = build_all_healthy_files(args.data_dir)
@@ -119,84 +122,141 @@ def main():
         per_k_vocabs[k] = build_full_vocabulary(k)
         logger.info(f"Built full vocabulary for k={k} (size={len(per_k_vocabs[k])})")
 
-    run_cache_dir = os.path.join(args.cache_dir, f"nystrom_cache_{uuid.uuid4().hex[:8]}")
-    os.makedirs(run_cache_dir, exist_ok=True)
-    logger.info(f"Using disk cache directory: {run_cache_dir}")
-
-    healthy_features_cache = {}
     # We distribute max_train among the 6 files we will use per fold
     seqs_per_file = args.max_train // 6 
-    
-    t0_cache = time.time()
-    for file_path in all_healthy:
-        subject_name = os.path.basename(file_path)
-        logger.info(f"\n--- Extracting features for {subject_name} ---")
+
+    if args.resume_cache_dir:
+        # ----------------------------------------------------------
+        # RESUME MODE: reuse existing .npz files, only re-sample
+        # sequences (deterministic with same seed) for metadata.
+        # ----------------------------------------------------------
+        run_cache_dir = args.resume_cache_dir
+        logger.info(f"RESUMING from existing cache directory: {run_cache_dir}")
         
-        rounds = sample_non_overlapping_rounds(
-            fasta_path=file_path,
-            n_rounds=1,
-            seqs_per_round=seqs_per_file,
-            seed=args.seed,
-            cache_dir=args.cache_dir,
-            excluded_indices=None,
-        )
-        patient_seqs = rounds[0]
+        healthy_features_cache = {}
+        t0_cache = time.time()
+        for file_path in all_healthy:
+            subject_name = os.path.basename(file_path)
+            npz_path = os.path.join(run_cache_dir, f"{subject_name}_train.npz")
+            if not os.path.isfile(npz_path):
+                logger.error(f"Missing cached train file: {npz_path}")
+                sys.exit(1)
+            
+            rounds = sample_non_overlapping_rounds(
+                fasta_path=file_path,
+                n_rounds=1,
+                seqs_per_round=seqs_per_file,
+                seed=args.seed,
+                cache_dir=args.cache_dir,
+                excluded_indices=None,
+            )
+            patient_seqs = rounds[0]
+            healthy_features_cache[file_path] = (patient_seqs, npz_path)
+            logger.info(f"  Loaded cached train features: {subject_name}")
         
-        X_patient = build_combined_test_features(
-            test_sequences=patient_seqs,
-            per_k_vocabs=per_k_vocabs,
-            max_k=args.max_k,
-            mismatches=args.mismatches,
-            mkl_weights=mkl_weights,
-            n_jobs=args.n_jobs,
-        )
+        test_features_cache = {}
+        all_test_files = all_healthy + colo_files
+        for file_path in all_test_files:
+            subject_name = "_".join(os.path.basename(file_path).split("_")[:2])
+            npz_path = os.path.join(run_cache_dir, f"{subject_name}_test.npz")
+            if not os.path.isfile(npz_path):
+                logger.error(f"Missing cached test file: {npz_path}")
+                sys.exit(1)
+            
+            rounds = sample_non_overlapping_rounds(
+                fasta_path=file_path,
+                n_rounds=1,
+                seqs_per_round=args.max_test,
+                seed=args.seed,
+                cache_dir=args.cache_dir,
+                excluded_indices=None,
+            )
+            test_seqs = rounds[0]
+            test_features_cache[file_path] = (test_seqs, npz_path)
+            logger.info(f"  Loaded cached test features: {subject_name}")
         
-        npz_path = os.path.join(run_cache_dir, f"{subject_name}_train.npz")
-        sp.save_npz(npz_path, X_patient)
-        healthy_features_cache[file_path] = (patient_seqs, npz_path)
-        del X_patient
-        gc.collect()
+        logger.info(f"\nCache resume completed in {time.time() - t0_cache:.1f}s")
+        logger.info("=" * 65)
+    else:
+        # ----------------------------------------------------------
+        # NORMAL MODE: extract features and cache to disk
+        # ----------------------------------------------------------
+        run_cache_dir = os.path.join(base_out_dir, "cache", f"nystrom_cache_{uuid.uuid4().hex[:8]}")
+        os.makedirs(run_cache_dir, exist_ok=True)
+        logger.info(f"Using disk cache directory: {run_cache_dir}")
+
+        healthy_features_cache = {}
         
-    logger.info(f"\nFeature extraction caching completed in {time.time() - t0_cache:.1f}s")
-    
-    # ------------------------------------------------------------------
-    # 0b. Pre-Cache Testing Features (Tumors + All Healthy)
-    # ------------------------------------------------------------------
-    logger.info("\n--- Pre-caching TEST features ---")
-    test_features_cache = {}
-    all_test_files = all_healthy + colo_files
-    
-    for file_path in all_test_files:
-        subject_name = "_".join(os.path.basename(file_path).split("_")[:2])
-        logger.info(f"Extracting test features for {subject_name} ...")
+        t0_cache = time.time()
+        for file_path in all_healthy:
+            subject_name = os.path.basename(file_path)
+            logger.info(f"\n--- Extracting features for {subject_name} ---")
+            
+            rounds = sample_non_overlapping_rounds(
+                fasta_path=file_path,
+                n_rounds=1,
+                seqs_per_round=seqs_per_file,
+                seed=args.seed,
+                cache_dir=args.cache_dir,
+                excluded_indices=None,
+            )
+            patient_seqs = rounds[0]
+            
+            X_patient = build_combined_test_features(
+                test_sequences=patient_seqs,
+                per_k_vocabs=per_k_vocabs,
+                max_k=args.max_k,
+                mismatches=args.mismatches,
+                mkl_weights=mkl_weights,
+                n_jobs=args.n_jobs,
+            )
+            
+            npz_path = os.path.join(run_cache_dir, f"{subject_name}_train.npz")
+            sp.save_npz(npz_path, X_patient)
+            healthy_features_cache[file_path] = (patient_seqs, npz_path)
+            del X_patient
+            gc.collect()
+            
+        logger.info(f"\nFeature extraction caching completed in {time.time() - t0_cache:.1f}s")
         
-        rounds = sample_non_overlapping_rounds(
-            fasta_path=file_path,
-            n_rounds=1,
-            seqs_per_round=args.max_test,
-            seed=args.seed,
-            cache_dir=args.cache_dir,
-            excluded_indices=None,
-        )
-        test_seqs = rounds[0]
+        # ------------------------------------------------------------------
+        # 0b. Pre-Cache Testing Features (Tumors + All Healthy)
+        # ------------------------------------------------------------------
+        logger.info("\n--- Pre-caching TEST features ---")
+        test_features_cache = {}
+        all_test_files = all_healthy + colo_files
         
-        X_test_combined = build_combined_test_features(
-            test_seqs, per_k_vocabs,
-            args.max_k, args.mismatches,
-            mkl_weights,
-            n_jobs=args.n_jobs,
-        )
-        X_test_norm, _ = normalize_rows(X_test_combined)
-        del X_test_combined
-        
-        npz_path = os.path.join(run_cache_dir, f"{subject_name}_test.npz")
-        sp.save_npz(npz_path, X_test_norm)
-        test_features_cache[file_path] = (test_seqs, npz_path)
-        del X_test_norm
-        gc.collect()
-        
-    logger.info(f"\nTest feature caching completed in {time.time() - t0_cache:.1f}s")
-    logger.info("=" * 65)
+        for file_path in all_test_files:
+            subject_name = "_".join(os.path.basename(file_path).split("_")[:2])
+            logger.info(f"Extracting test features for {subject_name} ...")
+            
+            rounds = sample_non_overlapping_rounds(
+                fasta_path=file_path,
+                n_rounds=1,
+                seqs_per_round=args.max_test,
+                seed=args.seed,
+                cache_dir=args.cache_dir,
+                excluded_indices=None,
+            )
+            test_seqs = rounds[0]
+            
+            X_test_combined = build_combined_test_features(
+                test_seqs, per_k_vocabs,
+                args.max_k, args.mismatches,
+                mkl_weights,
+                n_jobs=args.n_jobs,
+            )
+            X_test_norm, _ = normalize_rows(X_test_combined)
+            del X_test_combined
+            
+            npz_path = os.path.join(run_cache_dir, f"{subject_name}_test.npz")
+            sp.save_npz(npz_path, X_test_norm)
+            test_features_cache[file_path] = (test_seqs, npz_path)
+            del X_test_norm
+            gc.collect()
+            
+        logger.info(f"\nTest feature caching completed in {time.time() - t0_cache:.1f}s")
+        logger.info("=" * 65)
 
     # ------------------------------------------------------------------
     # FOLD LOOP
@@ -342,7 +402,8 @@ def main():
     # ------------------------------------------------------------------
     # Save Summary
     # ------------------------------------------------------------------
-    shutil.rmtree(run_cache_dir, ignore_errors=True)
+    if not args.resume_cache_dir:
+        shutil.rmtree(run_cache_dir, ignore_errors=True)
 
     logger.info("")
     logger.info("=" * 75)
