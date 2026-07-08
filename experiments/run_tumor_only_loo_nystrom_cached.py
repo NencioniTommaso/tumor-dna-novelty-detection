@@ -1,26 +1,14 @@
 """
-run_tumor_only_loo_exact_cached.py
-Loads pre-trained LOO exact kernel OC-SVM models and tests ONLY on specified
-tumor patients.  Test features are cached to disk as .npz files and reused
-across all 7 folds.
-
-Can optionally reuse test features already extracted by the Nyström pipeline
-via --feature-cache-dir (since both pipelines use the same feature extraction
-with identical max_k, mismatches, and MKL weights).
+run_tumor_only_loo_nystrom_cached.py
+Loads pre-trained LOO Nyström OC-SVM models and tests ONLY on specified tumor
+patients.  Features are extracted once, cached to disk as .npz files in the
+experiment's cache directory, and reused across all 7 folds.
 
 Usage
 -----
-    # Using its own results-dir cache:
-    python experiments/run_tumor_only_loo_exact_cached.py \\
+    python experiments/run_tumor_only_loo_nystrom_cached.py \\
         --data-dir /path/to/fasta_data \\
-        --results-dir results/full_loo_exact_cached/m_1/k_6 \\
-        --tumor-ids 1 2 3 4 5 6 7 8 10 16 17 18 19 20
-
-    # Reusing Nyström cache (skips feature extraction entirely):
-    python experiments/run_tumor_only_loo_exact_cached.py \\
-        --data-dir /path/to/fasta_data \\
-        --results-dir results/full_loo_exact_cached/m_1/k_6 \\
-        --feature-cache-dir results/full_loo_nystrom_cached/m_1/k_6/cache/nystrom_cache_55a18b3d \\
+        --results-dir results/full_loo_nystrom_cached/m_1/k_6 \\
         --tumor-ids 1 2 3 4 5 6 7 8 10 16 17 18 19 20
 """
 
@@ -39,12 +27,13 @@ import numpy as np
 import scipy.sparse as sp
 
 from src.data_utils import sample_non_overlapping_rounds
-from src.gram import generate_mkl_weights, parallel_asymmetric_gram_matrix
+from src.gram import generate_mkl_weights
 from src.mismatch import build_full_vocabulary
 from src.model_io import load_svm_model
 from src.nystrom import (
     build_combined_test_features,
     normalize_rows,
+    nystrom_transform,
 )
 from experiments.experiments_utils import (
     setup_logger,
@@ -59,7 +48,7 @@ logger = setup_logger(__name__)
 
 def main():
     parser = create_base_parser(
-        "Test tumor patients on pre-trained LOO exact models (disk-cached features)"
+        "Test tumor patients on pre-trained LOO Nyström models (disk-cached features)"
     )
     add_data_dir_arg(parser, required=True)
     add_cache_dir_arg(parser, project_root)
@@ -71,13 +60,7 @@ def main():
     parser.add_argument(
         "--results-dir", type=str, required=True,
         help="Path to the base results dir containing models/ and LOO_* dirs "
-             "(e.g. results/full_loo_exact_cached/m_1/k_6).",
-    )
-    parser.add_argument(
-        "--feature-cache-dir", type=str, default=None,
-        help="Path to an existing cache directory with pre-extracted .npz test features "
-             "(e.g. from the Nyström pipeline). When set, skips feature extraction for "
-             "tumors whose Colo_<id>_test.npz already exists there.",
+             "(e.g. results/full_loo_nystrom_cached/m_1/k_6).",
     )
     parser.add_argument(
         "--max-test", type=int, default=50_000,
@@ -86,10 +69,6 @@ def main():
     parser.add_argument(
         "--seed", type=int, default=42,
         help="Random seed for data loading (default: 42).",
-    )
-    parser.add_argument(
-        "--test-batch-size", type=int, default=10_000,
-        help="Number of test sequences to process at once for Gram matrix (default: 10000).",
     )
     parser.add_argument(
         "--skip-existing", action="store_true", default=True,
@@ -110,10 +89,10 @@ def main():
         sys.exit(1)
 
     model_files = sorted(
-        glob.glob(os.path.join(models_dir, "ocsvm_LOO_Healthy_*_exact.pkl"))
+        glob.glob(os.path.join(models_dir, "ocsvm_LOO_Healthy_*_nystrom.pkl"))
     )
     if not model_files:
-        logger.error(f"No pre-trained exact models found in {models_dir}")
+        logger.error(f"No pre-trained Nyström models found in {models_dir}")
         sys.exit(1)
 
     logger.info(f"Found {len(model_files)} pre-trained models in {models_dir}")
@@ -148,21 +127,32 @@ def main():
         sys.exit(1)
 
     # ------------------------------------------------------------------
-    # 4. Resolve feature cache directory
+    # 4. Locate experiment cache directory
     # ------------------------------------------------------------------
-    if args.feature_cache_dir:
-        # Use an external cache (e.g. from the Nyström pipeline)
-        feature_cache_dir = args.feature_cache_dir
-        if not os.path.isdir(feature_cache_dir):
-            logger.error(f"Feature cache directory not found: {feature_cache_dir}")
-            sys.exit(1)
-        logger.info(f"Using EXTERNAL feature cache: {feature_cache_dir}")
+    cache_base = os.path.join(args.results_dir, "cache")
+    if not os.path.isdir(cache_base):
+        logger.error(f"Cache base directory not found: {cache_base}")
+        sys.exit(1)
+
+    # Find the existing nystrom_cache_* subdirectory
+    cache_subdirs = [
+        d for d in os.listdir(cache_base)
+        if os.path.isdir(os.path.join(cache_base, d)) and d.startswith("nystrom_cache_")
+    ]
+    if len(cache_subdirs) == 1:
+        experiment_cache_dir = os.path.join(cache_base, cache_subdirs[0])
+    elif len(cache_subdirs) > 1:
+        # Use the most recent one
+        experiment_cache_dir = os.path.join(
+            cache_base,
+            sorted(cache_subdirs, key=lambda d: os.path.getmtime(os.path.join(cache_base, d)))[-1],
+        )
+        logger.warning(f"Multiple cache dirs found, using most recent: {experiment_cache_dir}")
     else:
-        # Use/create a cache inside the results dir
-        cache_base = os.path.join(args.results_dir, "cache")
-        os.makedirs(cache_base, exist_ok=True)
-        feature_cache_dir = cache_base
-        logger.info(f"Using results-dir feature cache: {feature_cache_dir}")
+        logger.error(f"No nystrom_cache_* subdirectory found in {cache_base}")
+        sys.exit(1)
+
+    logger.info(f"Using experiment cache directory: {experiment_cache_dir}")
 
     # ------------------------------------------------------------------
     # 5. Build vocabularies
@@ -176,17 +166,32 @@ def main():
         logger.info(f"Built full vocabulary for k={k} (size={len(per_k_vocabs[k])})")
 
     # ------------------------------------------------------------------
-    # 6. Pre-cache tumor test features to disk
+    # 6. Pre-cache tumor features to disk
     # ------------------------------------------------------------------
-    logger.info("\n--- Pre-caching TUMOR test features to disk ---")
+    logger.info("\n--- Pre-caching TUMOR features to disk ---")
     tumor_cache_info = {}  # tid -> (test_seqs, npz_path)
     t0_cache = time.time()
 
     for tid, file_path in tumor_files:
         subject_name = f"Colo_{tid}"
-        npz_path = os.path.join(feature_cache_dir, f"{subject_name}_test.npz")
+        npz_path = os.path.join(experiment_cache_dir, f"{subject_name}_test.npz")
 
-        # Always sample sequences (needed for summary stats)
+        # Reuse from cache if already extracted (e.g. Colo_11 through Colo_15)
+        if os.path.isfile(npz_path):
+            logger.info(f"  Reusing cached features: {subject_name}")
+            rounds = sample_non_overlapping_rounds(
+                fasta_path=file_path,
+                n_rounds=1,
+                seqs_per_round=args.max_test,
+                seed=args.seed,
+                cache_dir=args.cache_dir,
+                excluded_indices=None,
+            )
+            test_seqs = rounds[0]
+            tumor_cache_info[tid] = (test_seqs, npz_path)
+            continue
+
+        logger.info(f"  Extracting test features for {subject_name} ...")
         rounds = sample_non_overlapping_rounds(
             fasta_path=file_path,
             n_rounds=1,
@@ -196,14 +201,6 @@ def main():
             excluded_indices=None,
         )
         test_seqs = rounds[0]
-
-        # Reuse from cache if already extracted
-        if os.path.isfile(npz_path):
-            logger.info(f"  Reusing cached features: {subject_name} ({npz_path})")
-            tumor_cache_info[tid] = (test_seqs, npz_path)
-            continue
-
-        logger.info(f"  Extracting test features for {subject_name} ...")
 
         X_test_combined = build_combined_test_features(
             test_seqs, per_k_vocabs,
@@ -227,15 +224,14 @@ def main():
     # ------------------------------------------------------------------
     logger.info("")
     logger.info("=" * 65)
-    logger.info(" TUMOR-ONLY TEST ON PRE-TRAINED LOO EXACT MODELS")
+    logger.info(" TUMOR-ONLY TEST ON PRE-TRAINED LOO NYSTRÖM MODELS")
     logger.info("=" * 65)
     logger.info(f"  Models dir       : {models_dir}")
     logger.info(f"  Tumor patients   : {['Colo_' + str(tid) for tid, _ in tumor_files]}")
     logger.info(f"  Test sequences   : {args.max_test}")
-    logger.info(f"  Test batch size  : {args.test_batch_size}")
     logger.info(f"  Kernel           : max_k={max_k}, m={mismatches}")
     logger.info(f"  MKL weights      : {mkl_weights}")
-    logger.info(f"  Feature cache    : {feature_cache_dir}")
+    logger.info(f"  Cache dir        : {experiment_cache_dir}")
     logger.info(f"  Skip existing    : {args.skip_existing}")
     logger.info("=" * 65)
 
@@ -247,7 +243,7 @@ def main():
 
     for model_path in model_files:
         model_name = os.path.basename(model_path)
-        fold_name = model_name.replace("ocsvm_", "").replace("_exact.pkl", "")
+        fold_name = model_name.replace("ocsvm_", "").replace("_nystrom.pkl", "")
         out_dir = os.path.join(args.results_dir, fold_name)
         os.makedirs(out_dir, exist_ok=True)
 
@@ -270,19 +266,13 @@ def main():
         logger.info(f"Loading model: {model_name}")
         artifact = load_svm_model(model_path)
         svm = artifact.model
-        train_seqs = artifact.train_sequences
+        nystrom_state = artifact.nystrom_state
 
-        # Extract training features (must be per-fold — each fold has different training set)
-        logger.info(f"Extracting features for {len(train_seqs)} training sequences ...")
-        t0 = time.time()
-        X_train_combined = build_combined_test_features(
-            train_seqs, per_k_vocabs,
-            max_k, mismatches, mkl_weights,
-            n_jobs=args.n_jobs,
-        )
-        X_norm_train, _ = normalize_rows(X_train_combined)
-        del X_train_combined
-        logger.info(f"Training features extracted in {time.time() - t0:.1f}s")
+        if nystrom_state is None:
+            logger.error(f"Model {model_name} has no NystromState. Skipping fold.")
+            del artifact, svm
+            gc.collect()
+            continue
 
         for tid, _ in tumor_files:
             subject_name = f"Colo_{tid}"
@@ -295,26 +285,16 @@ def main():
             logger.info(f"─── Testing: {subject_name} ───")
             test_seqs, npz_path = tumor_cache_info[tid]
 
-            # Load cached test features from disk
+            # Load cached features from disk
             X_test_norm = sp.load_npz(npz_path)
-            n_test = X_test_norm.shape[0]
 
-            logger.info(f"  Computing asymmetric Gram matrix ({n_test} test × {X_norm_train.shape[0]} train) in batches ...")
-            all_inverted_scores = []
-
-            for start_idx in range(0, n_test, args.test_batch_size):
-                end_idx = min(start_idx + args.test_batch_size, n_test)
-                X_batch = X_test_norm[start_idx:end_idx]
-
-                K_test_batch = parallel_asymmetric_gram_matrix(X_batch, X_norm_train, n_jobs=args.n_jobs)
-                anomaly_scores = svm.decision_function(K_test_batch)
-                inverted = -anomaly_scores  # higher = more anomalous
-                all_inverted_scores.extend(inverted)
-
-                del K_test_batch, anomaly_scores, inverted
-
+            logger.info(f"  Projecting {X_test_norm.shape[0]} seqs into Nyström space ...")
+            Phi_test = nystrom_transform(X_test_norm, nystrom_state, n_jobs=args.n_jobs)
             del X_test_norm
-            inverted = np.array(all_inverted_scores)
+
+            anomaly_scores = svm.decision_function(Phi_test)
+            inverted = -anomaly_scores  # higher = more anomalous
+            del Phi_test, anomaly_scores
 
             # Save scores
             with open(scores_path, "w", newline="") as fh:
@@ -337,10 +317,10 @@ def main():
                 "n_sequences": len(test_seqs),
             })
 
-            del all_inverted_scores, inverted
+            del inverted
             gc.collect()
 
-        del X_norm_train, artifact, svm, train_seqs
+        del artifact, svm, nystrom_state
         gc.collect()
 
     # ------------------------------------------------------------------
