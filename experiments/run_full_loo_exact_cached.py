@@ -10,6 +10,8 @@ import gc
 import os
 import sys
 import time
+import uuid
+import shutil
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
@@ -111,6 +113,10 @@ def main():
         per_k_vocabs[k] = build_full_vocabulary(k)
         logger.info(f"Built full vocabulary for k={k} (size={len(per_k_vocabs[k])})")
 
+    run_cache_dir = os.path.join(args.cache_dir, f"exact_cache_{uuid.uuid4().hex[:8]}")
+    os.makedirs(run_cache_dir, exist_ok=True)
+    logger.info(f"Using disk cache directory: {run_cache_dir}")
+
     healthy_features_cache = {}
     # We distribute max_train among the 6 files we will use per fold
     seqs_per_file = args.max_train // 6 
@@ -139,7 +145,11 @@ def main():
             n_jobs=args.n_jobs,
         )
         
-        healthy_features_cache[file_path] = (patient_seqs, X_patient)
+        npz_path = os.path.join(run_cache_dir, f"{subject_name}_train.npz")
+        sp.save_npz(npz_path, X_patient)
+        healthy_features_cache[file_path] = (patient_seqs, npz_path)
+        del X_patient
+        gc.collect()
         
     logger.info(f"\nFeature extraction caching completed in {time.time() - t0_cache:.1f}s")
     
@@ -149,8 +159,6 @@ def main():
     logger.info("\n--- Pre-caching TEST features ---")
     test_features_cache = {}
     all_test_files = all_healthy + colo_files
-    test_features_dir = os.path.join(base_out_dir, "test_features")
-    os.makedirs(test_features_dir, exist_ok=True)
     
     for file_path in all_test_files:
         subject_name = "_".join(os.path.basename(file_path).split("_")[:2])
@@ -175,10 +183,11 @@ def main():
         X_test_norm, _ = normalize_rows(X_test_combined)
         del X_test_combined
         
-        test_features_cache[file_path] = (test_seqs, X_test_norm)
-        
-        features_path = os.path.join(test_features_dir, f"{subject_name}_features_seed{args.seed}.npz")
-        sp.save_npz(features_path, X_test_norm)
+        npz_path = os.path.join(run_cache_dir, f"{subject_name}_test.npz")
+        sp.save_npz(npz_path, X_test_norm)
+        test_features_cache[file_path] = (test_seqs, npz_path)
+        del X_test_norm
+        gc.collect()
         
     logger.info(f"\nTest feature caching completed in {time.time() - t0_cache:.1f}s")
     logger.info("=" * 65)
@@ -220,11 +229,12 @@ def main():
         train_data = []
         X_blocks = []
         for f in train_files:
-            seqs, X = healthy_features_cache[f]
+            seqs, npz_path = healthy_features_cache[f]
             train_data.extend(seqs)
-            X_blocks.append(X)
+            X_blocks.append(sp.load_npz(npz_path))
             
         X_combined = sp.vstack(X_blocks, format='csr')
+        del X_blocks
         N = len(train_data)
         logger.info(f"Assembled {N:,} training sequences. Matrix shape: {X_combined.shape}")
         
@@ -278,7 +288,8 @@ def main():
             subject_name = "_".join(os.path.basename(file_path).split("_")[:2])
             logger.info(f"─── Testing: {subject_name} ({label.upper()}) ───")
 
-            test_seqs, X_test_norm = test_features_cache[file_path]
+            test_seqs, npz_path = test_features_cache[file_path]
+            X_test_norm = sp.load_npz(npz_path)
             n_test = X_test_norm.shape[0]
             
             all_inverted_scores = []
@@ -320,12 +331,17 @@ def main():
                 "n_sequences": len(test_seqs),
             })
 
-            del all_inverted_scores
+            del X_test_norm, all_inverted_scores
             gc.collect()
             
         del X_norm_train
         gc.collect()
             
+    # ------------------------------------------------------------------
+    # Cleanup temp cache
+    # ------------------------------------------------------------------
+    shutil.rmtree(run_cache_dir, ignore_errors=True)
+
     # ------------------------------------------------------------------
     # Save Summary
     # ------------------------------------------------------------------
